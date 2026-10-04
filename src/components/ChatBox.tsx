@@ -455,7 +455,7 @@ export function ChatBox({ apiKeys, model, onExecuteCommand, onUpdateCircuit, onS
   useEffect(() => {
     queueMicrotask(() => {
       try {
-        const saved = localStorage.getItem(chatSessionKey(sessionId));
+        const saved = localStorage.getItem(chatSessionKey(sessionId, user?.uid));
         if (saved) {
           const parsed: unknown = JSON.parse(saved);
           if (Array.isArray(parsed)) {
@@ -494,7 +494,7 @@ export function ChatBox({ apiKeys, model, onExecuteCommand, onUpdateCircuit, onS
 
   useEffect(() => {
     if (chatReady) {
-      try { localStorage.setItem(chatSessionKey(sessionId), JSON.stringify(messages)); } catch { /* Keep the chat usable if storage is full. */ }
+      try { localStorage.setItem(chatSessionKey(sessionId, user?.uid), JSON.stringify(messages)); } catch { /* Keep the chat usable if storage is full. */ }
     }
   }, [chatReady, messages, sessionId]);
 
