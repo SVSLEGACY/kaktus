@@ -58,17 +58,25 @@ export default function PCBDesignerPage() {
       document.removeEventListener('mouseup', handleMouseUp);
     };
   }, []);
-  useEffect(() => {
-    const stored = localStorage.getItem('gemini_api_keys');
-    if (stored) {
-      try {
-        setApiKeys(JSON.parse(stored));
-      } catch(e) {}
-    } else {
-      const oldKey = localStorage.getItem('gemini_api_key');
-      if (oldKey) setApiKeys([oldKey]);
-    }
-  }, []);
+  
+    useEffect(() => {
+      getApiPool().then(pool => {
+        if (pool && pool.length > 0) {
+          setApiKeys(pool.map(p => p.key));
+        } else {
+          const stored = localStorage.getItem('gemini_api_keys');
+          if (stored) {
+            try {
+              setApiKeys(JSON.parse(stored));
+            } catch(e) {}
+          } else {
+            const oldKey = localStorage.getItem('gemini_api_key');
+            if (oldKey) setApiKeys([oldKey]);
+          }
+        }
+      });
+    }, []);
+  
 
   const [pcbData, setPcbData] = useState<any | null>(null);
   const [currentStep, setCurrentStep] = useState(0);

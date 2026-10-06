@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Move, CheckCircle2, ChevronLeft, ChevronRight, ChevronUp, Play, ZoomIn, ZoomOut, Maximize, Send, Loader2, MessageCircle, X, SkipBack, Search } from 'lucide-react';
+import { Move, CheckCircle2, ChevronLeft, ChevronRight, ChevronUp, Play, ZoomIn, ZoomOut, Maximize, Send, Loader2, MessageCircle, X, SkipBack, Search, Zap } from 'lucide-react';
 import { requestAgent } from '@/lib/agent/client';
 // system-prompt not used here; canvas chat uses contextPrompt directly
 import { extractTutorialResponse, cleanAgentText } from '@/lib/agent/protocol';
@@ -53,6 +53,7 @@ interface CircuitCanvasProps {
   apiKeys?: string[];
   model?: string;
   onUpdateCircuit?: (data: any) => void;
+  onCompileRequest?: (code: string) => void;
 }
 
 
@@ -98,7 +99,7 @@ function CodePreviewModal({ code, language, onClose }: { code: string; language:
   );
 }
 
-export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChange: setCurrentStepIndex, apiKeys, model, onUpdateCircuit, allTabs }: CircuitCanvasProps) {
+export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChange: setCurrentStepIndex, apiKeys, model, onUpdateCircuit, onCompileRequest, allTabs }: CircuitCanvasProps) {
   const [previewCode, setPreviewCode] = useState<{code: string, language: string} | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [wirePaths, setWirePaths] = useState<{ id: string, path: string, color: string, fromX: number, fromY: number, fromPin: string, labelX: number, labelY: number, labelText: string, fromComp: string, toComp: string }[]>([]);
@@ -111,6 +112,23 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
   const [canvasChatMessages, setCanvasChatMessages] = useState<{role: string, text: string}[]>([]);
   const [canvasChatLoading, setCanvasChatLoading] = useState(false);
   const canvasChatRef = useRef<HTMLDivElement>(null);
+
+  const [isBoardConnected, setIsBoardConnected] = useState(false);
+
+  useEffect(() => {
+    const checkBoard = async () => {
+      try {
+        const res = await fetch('http://localhost:8000/flash/boards');
+        const data = await res.json();
+        setIsBoardConnected(data.ports && data.ports.some((p: any) => p.board));
+      } catch {
+        setIsBoardConnected(false);
+      }
+    };
+    checkBoard();
+    const interval = setInterval(checkBoard, 3000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     canvasChatRef.current?.scrollTo({ top: canvasChatRef.current.scrollHeight, behavior: 'smooth' });
@@ -1092,7 +1110,7 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
         <motion.div 
           initial={{ y: 50, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
-          className={`absolute ${dockPosition === 'bottom-right' ? 'bottom-4 right-4 items-end' : 'top-4 left-4 items-start'} z-30 flex flex-col gap-2 max-h-[calc(100vh-32px)] pointer-events-none`}
+          className={`absolute ${dockPosition === 'bottom-right' ? 'bottom-10 right-6 items-end' : 'top-4 left-4 items-start'} z-30 flex flex-col gap-2 max-h-[calc(100vh-32px)] pointer-events-none`}
         >
           {/* We wrap children in a pointer-events-auto div to allow interaction while keeping the wrapper strictly for layout */}
           {/* Expanded step detail panel (toggle) */}
@@ -1231,11 +1249,44 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
               <ChevronRight size={14} />
             </button>
             
-            {currentStepIndex === data.steps.length - 1 && (
-               <button className="flex items-center gap-1.5 bg-white hover:bg-gray-200 text-black px-3 py-1.5 rounded-lg font-bold text-xs transition-all">
-                 <Play size={12} /> Compile
-               </button>
-            )}
+            {(() => {
+              const currentStep = data.steps[currentStepIndex];
+              if (!currentStep) return null;
+              
+              let hasCode = !!currentStep.code;
+              let extractedCode = currentStep.code ? currentStep.code.replace(/\\n/g, '\n') : '';
+              
+              if (!hasCode && currentStep.detail) {
+                const codeRegex = /```(\w*)\s*([\s\S]*?)```/g;
+                let match;
+                while ((match = codeRegex.exec(currentStep.detail)) !== null) {
+                  hasCode = true;
+                  extractedCode = match[2].trim();
+                }
+              }
+
+              if (!hasCode) return null;
+
+              return (
+                <button 
+                  onClick={() => {
+                    if (extractedCode && onCompileRequest) {
+                      onCompileRequest(extractedCode);
+                    } else {
+                      alert('No code found on this step.');
+                    }
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold text-xs transition-all duration-300 ${
+                    isBoardConnected
+                      ? 'bg-black text-white shadow-[0_0_15px_rgba(255,255,255,0.3)] hover:shadow-[0_0_20px_rgba(255,255,255,0.5)] border border-gray-700'
+                      : 'bg-gray-800 text-gray-500 hover:bg-gray-700 border border-gray-800'
+                  }`}
+                  title={isBoardConnected ? 'Arduino detected!' : 'Connect an Arduino via USB'}
+                >
+                  <Zap size={12} className={isBoardConnected ? 'text-yellow-400' : ''} /> Flash to Board
+                </button>
+              );
+            })()}
           </div>
           
           {/* Current step info panel */}
@@ -1244,7 +1295,7 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
             if (!step) return null;
             const pc = 'bg-gray-800 text-gray-200 border-gray-700';
             return (
-              <div className="bg-[#111]/95 backdrop-blur-sm border border-gray-800 rounded-xl px-3 py-2.5 max-w-[340px] shadow-lg space-y-2">
+              <div className="bg-[#111]/95 backdrop-blur-sm border border-gray-800 rounded-xl px-3 py-2.5 max-w-[340px] shadow-lg space-y-2 pointer-events-auto">
                 {/* Phase badge + instruction */}
                 <div className="flex items-start gap-2">
                   {step.phase && (
@@ -1278,7 +1329,7 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                   }
 
                   return (
-                    <>
+                    <div className="max-h-[300px] overflow-y-auto pr-1">
                       {parts.length > 0 && (
                         <p className="text-[11px] text-gray-500 leading-relaxed border-l-2 border-gray-700 pl-2 whitespace-pre-wrap">
                           {parts}
@@ -1312,7 +1363,7 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                           </pre>
                         </div>
                       )}
-                    </>
+                    </div>
                   );
                 })()}
                 

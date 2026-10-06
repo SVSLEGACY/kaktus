@@ -4,7 +4,8 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 import { useRouter } from 'next/navigation';
 import { getAdminPaymentSettings, updateAdminPaymentSettings, getPendingPayments, approvePayment, rejectPayment, PaymentTransaction, PaymentSettings } from '@/lib/payments';
-import { Check, X, Loader2, Upload, QrCode } from 'lucide-react';
+import { Check, X, Loader2, Upload, QrCode, Key, Plus, Trash2 } from 'lucide-react';
+import { getApiPool, updateApiPool, ApiKeyData } from '@/lib/admin';
 import Link from 'next/link';
 
 export default function AdminPanel() {
@@ -15,6 +16,9 @@ export default function AdminPanel() {
   const [payments, setPayments] = useState<PaymentTransaction[]>([]);
   const [savingSettings, setSavingSettings] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [apiKeys, setApiKeys] = useState<ApiKeyData[]>([]);
+  const [newKey, setNewKey] = useState('');
+  const [newLabel, setNewLabel] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -28,8 +32,50 @@ export default function AdminPanel() {
     if (user) {
       getAdminPaymentSettings().then(setSettings);
       loadPayments();
+      
+      getApiPool().then(async (pool) => {
+        if (pool && pool.length > 0) {
+          setApiKeys(pool);
+        } else {
+          // If Firestore is empty, try to migrate from localStorage so "jo already hai woh bhi dikhe"
+          const stored = localStorage.getItem('gemini_api_keys');
+          const oldKey = localStorage.getItem('gemini_api_key');
+          let migrated = [];
+          if (stored) {
+            try {
+              const keys = JSON.parse(stored);
+              migrated = keys.map((k, i) => ({ key: k, label: 'My Key ' + (i+1), status: 'active', addedAt: new Date().toISOString() }));
+            } catch(e) {}
+          } else if (oldKey) {
+            migrated = [{ key: oldKey, label: 'My Key 1', status: 'active', addedAt: new Date().toISOString() }];
+          }
+          
+          if (migrated.length > 0) {
+            setApiKeys(migrated);
+            await updateApiPool(migrated);
+          }
+        }
+      });
+
     }
   }, [user]);
+
+  
+  const handleAddApiKey = async () => {
+    if (!newKey || !newLabel) return;
+    const newApiKeys = [...apiKeys, { key: newKey, label: newLabel, status: 'active' as const, addedAt: new Date().toISOString() }];
+    setApiKeys(newApiKeys);
+    setNewKey('');
+    setNewLabel('');
+    await updateApiPool(newApiKeys);
+  };
+
+  const handleRemoveApiKey = async (indexToRemove: number) => {
+    if (!confirm('Remove this API key?')) return;
+    const newApiKeys = apiKeys.filter((_, idx) => idx !== indexToRemove);
+    setApiKeys(newApiKeys);
+    await updateApiPool(newApiKeys);
+  };
 
   const loadPayments = async () => {
     const data = await getPendingPayments();
@@ -185,6 +231,95 @@ export default function AdminPanel() {
           </div>
 
         </div>
+
+        {/* API Pool Section */}
+        <div className="mt-8 bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 bg-purple-100 rounded-full flex items-center justify-center">
+              <Key className="text-purple-600 w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold">API Key Pool</h2>
+              <p className="text-sm text-gray-500">Add multiple Gemini API keys here. The app will automatically rotate them.</p>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <div className="flex gap-4 items-end bg-gray-50 p-4 rounded-xl border border-gray-200">
+              <div className="flex-1">
+                <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">Label (e.g. Key 1)</label>
+                <input 
+                  type="text" 
+                  value={newLabel}
+                  onChange={e => setNewLabel(e.target.value)}
+                  placeholder="My First Key"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-200 outline-none"
+                />
+              </div>
+              <div className="flex-[2]">
+                <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">API Key</label>
+                <input 
+                  type="text" 
+                  value={newKey}
+                  onChange={e => setNewKey(e.target.value)}
+                  placeholder="AIzaSy..."
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-200 outline-none font-mono text-sm"
+                />
+              </div>
+              <button 
+                onClick={handleAddApiKey}
+                disabled={!newKey || !newLabel}
+                className="bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white font-bold px-6 py-2 rounded-lg transition-colors flex items-center gap-2 h-[42px]"
+              >
+                <Plus size={16} /> Add Key
+              </button>
+            </div>
+
+            <div className="mt-4">
+              {apiKeys.length === 0 ? (
+                <div className="text-center py-8 text-gray-500 border-2 border-dashed border-gray-200 rounded-xl">
+                  <Key className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                  <p>No API keys added yet. Add your first key above.</p>
+                </div>
+              ) : (
+                <div className="border border-gray-200 rounded-xl overflow-hidden">
+                  <table className="w-full text-left border-collapse">
+                    <thead className="bg-gray-50 border-b border-gray-200 text-sm">
+                      <tr>
+                        <th className="px-4 py-3 font-semibold text-gray-600">Label</th>
+                        <th className="px-4 py-3 font-semibold text-gray-600">API Key</th>
+                        <th className="px-4 py-3 font-semibold text-gray-600">Status</th>
+                        <th className="px-4 py-3 font-semibold text-gray-600 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200 text-sm">
+                      {apiKeys.map((k, idx) => (
+                        <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-4 py-3 font-medium">{k.label}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-500">{k.key.substring(0, 10)}...{k.key.substring(k.key.length - 4)}</td>
+                          <td className="px-4 py-3">
+                            <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded-full text-xs font-bold uppercase tracking-wide">
+                              {k.status}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <button 
+                              onClick={() => handleRemoveApiKey(idx)}
+                              className="text-red-500 hover:text-red-700 p-1.5 rounded-lg hover:bg-red-50 transition-colors inline-flex"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   );

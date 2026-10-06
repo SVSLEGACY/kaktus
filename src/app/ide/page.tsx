@@ -15,6 +15,7 @@ import { extractProjectPlanResponse } from '@/lib/agent/protocol';
 import type { PlanBuildAction, ProjectPlan, ResearchSource } from '@/lib/agent/protocol';
 import { insertStepsAfter } from '@/lib/agent/workspace';
 import { useAuth } from '@/components/AuthProvider';
+import { getApiPool } from '@/lib/admin';
 import { signOut } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { syncToFirebase, loadFromFirebase } from '@/lib/firebase-sync';
@@ -266,17 +267,27 @@ export default function Home() {
       document.removeEventListener('mouseup', handleMouseUp);
     };
   }, []);
-  useEffect(() => {
-    const stored = localStorage.getItem('gemini_api_keys');
-    if (stored) {
-      try {
-        setApiKeys(JSON.parse(stored));
-      } catch(e) {}
-    } else {
-      const oldKey = localStorage.getItem('gemini_api_key');
-      if (oldKey) setApiKeys([oldKey]);
-    }
-  }, []);
+  
+    useEffect(() => {
+      // First try to get Admin API Pool (App Global Keys)
+      getApiPool().then(pool => {
+        if (pool && pool.length > 0) {
+          setApiKeys(pool.map(p => p.key));
+        } else {
+          // Fallback to local storage for backward compatibility
+          const stored = localStorage.getItem('gemini_api_keys');
+          if (stored) {
+            try {
+              setApiKeys(JSON.parse(stored));
+            } catch(e) {}
+          } else {
+            const oldKey = localStorage.getItem('gemini_api_key');
+            if (oldKey) setApiKeys([oldKey]);
+          }
+        }
+      });
+    }, []);
+  
 
   const handleExecuteCommand = (cmd: string) => {
     if (!isTerminalOpen) setIsTerminalOpen(true);
@@ -701,15 +712,19 @@ export default function Home() {
               </div>
             ) : (
               <CircuitCanvas
-                key={sessionId}
-                data={circuitData}
-                currentStep={currentStep}
-                allTabs={allTabs}
-                onStepChange={handleStepChange}
-                apiKeys={apiKeys}
-                model={selectedModel}
-                onUpdateCircuit={handleCircuitUpdate}
-              />
+    key={sessionId}
+    data={circuitData}
+    currentStep={currentStep}
+    allTabs={allTabs}
+    onStepChange={handleStepChange}
+    apiKeys={apiKeys}
+    model={selectedModel}
+    onUpdateCircuit={handleCircuitUpdate}
+    onCompileRequest={(code) => {
+      setGeneratedCode(code);
+      setIsFlashOpen(true);
+    }}
+  />
             )}
           </div>
         </div>

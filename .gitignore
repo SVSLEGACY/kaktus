@@ -39,3 +39,17 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+.vercel
+.env*
+
+*.js
+*.py
+*.txt
+!server.js
+!next.config.js
+!postcss.config.js
+!tailwind.config.js
+
+*.ps1
+*.html

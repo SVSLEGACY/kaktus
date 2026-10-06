@@ -1,3 +1,5 @@
+import { reviewGeneratedCode } from './code-quality.ts';
+
 export type AgentAction = 'NEW_PROJECT' | 'UPDATE_CURRENT' | 'NEW_TAB' | 'MERGE_TAB';
 
 export interface AgentPin {
@@ -347,6 +349,12 @@ export function validateAgentPlan(input: unknown): ValidationResult {
     const verify = typeof rawStep.verify === 'string' ? rawStep.verify.trim() : '';
     if (!detail) errors.push(`${path}.detail must explain the physical task, connections, or engineering reason.`);
     if (!verify) errors.push(`${path}.verify must provide an observable check or measurement.`);
+    if (rawStep.code !== undefined && (typeof rawStep.code !== 'string' || !rawStep.code.trim())) {
+      errors.push(`${path}.code must be a non-empty string when provided.`);
+    }
+    if (rawStep.code_language !== undefined && (typeof rawStep.code_language !== 'string' || !rawStep.code_language.trim())) {
+      errors.push(`${path}.code_language must be a non-empty string when provided.`);
+    }
     errors.push(...validateElectricalTestWording(rawStep, path));
 
     const rawComponents = rawStep.add_components ?? [];
@@ -436,6 +444,9 @@ export function validateAgentPlan(input: unknown): ValidationResult {
     ...input,
     steps: normalizedSteps,
   } as AgentPlan;
+  warnings.push(...reviewGeneratedCode(normalizedSteps).map(finding =>
+    `Code review (step ${finding.stepNumber}): ${finding.message}`,
+  ));
   return { ok: errors.length === 0, value: plan, errors, warnings };
 }
 

@@ -31,7 +31,21 @@ interface AgentRequest {
 
 export async function requestAgent(request: AgentRequest): Promise<AgentResponse> {
   if (!request.apiKeys || request.apiKeys.length === 0) {
-    throw new Error('No API keys provided.');
+    // Fallback to server-side default API key
+    const payload = { ...request, apiKey: 'default_server_key' };
+    delete (payload as any).apiKeys;
+
+    if (request.abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
+    const response = await fetch('/api/agent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: request.abortSignal,
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Agent request failed');
+    return data;
   }
 
   // Shuffle keys for load balancing

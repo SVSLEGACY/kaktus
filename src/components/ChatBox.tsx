@@ -1,18 +1,19 @@
 'use client';
 
 import { useState, useRef, useEffect, type ChangeEvent } from 'react';
-import { Send, Loader2, Terminal, Cpu, Zap, ChevronDown, ChevronUp, CheckCircle2, Cable, Code, Search, ArrowRight, Layers, GitMerge, Plus, Mic, ExternalLink, Play, BookOpen, Wrench, Trash2, History , Copy, Undo2, X, FileDown, Printer, Download, CircleDot } from 'lucide-react';
+import { Send, Loader2, Terminal, Cpu, Zap, ChevronDown, ChevronUp, CheckCircle2, AlertTriangle, Cable, Code, Search, ArrowRight, Layers, GitMerge, Plus, Mic, ExternalLink, Play, BookOpen, Wrench, Trash2, History , Copy, Undo2, X, FileDown, Printer, Download, CircleDot } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { requestAgent, toGeminiImagePart, type AgentMessage } from '@/lib/agent/client';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { buildHardwareStudioSystemPrompt } from '@/lib/agent/system-prompt';
 import { extractTutorialResponse, extractOptions, extractNextSteps, extractProjectPlanResponse, recoverPersistedProjectPlans } from '@/lib/agent/protocol';
-import type { AgentOptionsBlock, AgentNextStepsBlock, PlanBuildAction, ProjectPlan, ResearchSource } from '@/lib/agent/protocol';
-import { routeExplicitStepEdit, routePlanPhase } from '@/lib/agent/workspace';
+import type { AgentOptionsBlock, AgentNextStepsBlock, AgentPlan, PlanBuildAction, ProjectPlan, ResearchSource } from '@/lib/agent/protocol';
+import { isCanvasMutationRequest, routeExplicitStepEdit, routePlanPhase } from '@/lib/agent/workspace';
 import { chatSessionKey, normalizeSessionTitle, type ChatSessionSummary } from '@/lib/session-store';
 import { imageAttachmentDataUrl, isImageAttachment, MAX_IMAGE_ATTACHMENTS, prepareImageAttachments, type ImageAttachment } from '@/lib/agent/image-attachments';
 import { useAuth } from '@/components/AuthProvider';
+import { diffArduinoSource, extractRepairedArduinoSource, inferArduinoBoard, MAX_FIRMWARE_REPAIR_ATTEMPTS, normalizeArduinoSource, runFirmwareRepairLoop, type FirmwareCompileResult, type FirmwareDiffLine } from '@/lib/agent/firmware-validation';
 
 // --- Interfaces ---
 interface ParsedTutorial {
@@ -25,6 +26,7 @@ interface ParsedTutorial {
   componentsCount: number;
   connectionsCount: number;
   codeSteps: number;
+  codeQualityWarnings?: string[];
   phases: string[];
   steps: Array<{
     instruction: string;
@@ -71,6 +73,39 @@ interface Message {
   phaseStartApproach?: 'recommended' | 'canvas-first' | 'hardware-first';
   canvasWarning?: string;
   imageAttachments?: ImageAttachment[];
+  firmwareBuilds?: FirmwareBuildReport[];
+}
+
+interface FirmwareBuildReport {
+  status: 'verified' | 'unverified';
+  stepName: string;
+  boardName?: string;
+  repairAttempts: number;
+  changes?: FirmwareDiffLine[];
+  note?: string;
+}
+
+interface FirmwareCompileResponse {
+  status?: unknown;
+  detail?: unknown;
+  error?: unknown;
+  stderr?: unknown;
+  stdout?: unknown;
+  missing_libraries?: unknown[];
+}
+
+function componentTypesFromSteps(steps: unknown): string[] {
+  if (!Array.isArray(steps)) return [];
+  return steps.flatMap((entry: unknown) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const components = (entry as Record<string, unknown>).add_components;
+    if (!Array.isArray(components)) return [];
+    return components.map((component: unknown) => {
+      if (!component || typeof component !== 'object') return '';
+      const record = component as Record<string, unknown>;
+      return `${typeof record.type === 'string' ? record.type : ''} ${typeof record.label === 'string' ? record.label : ''}`;
+    });
+  });
 }
 
 interface WorkflowOverride {
@@ -130,6 +165,169 @@ const QUICK_ACTIONS = [
   { label: "Amplifier", prompt: "Build an audio amplifier using LM386 with volume control and speaker output" },
   { label: "Line Follower", prompt: "Build a line following robot with L298N motor driver, 3 IR sensors, and DC motors" },
 ];
+
+const HARDWARE_API = 'http://localhost:8000';
+
+async function validateGeneratedFirmware({
+  plan,
+  apiKeys,
+  model,
+  signal,
+  componentTypes,
+  onProgress,
+}: {
+  plan: AgentPlan;
+  apiKeys: string[];
+  model: string;
+  signal: AbortSignal;
+  componentTypes: string[];
+  onProgress: (message: string) => void;
+}): Promise<{ ok: boolean; reports: FirmwareBuildReport[] }> {
+  const codeSteps = plan.steps
+    .map((step, index) => ({ step, index }))
+    .filter(({ step }) => {
+      const language = (step.code_language || '').toLowerCase();
+      if (language && !/^(?:c\+\+|cpp|ino|arduino)$/.test(language)) return false;
+      return Boolean(step.code && (/\bvoid\s+setup\s*\(|\bvoid\s+loop\s*\(|\bpinMode\s*\(|#include\s*[<"]Arduino\.h/i.test(step.code)
+        || /^(?:c\+\+|cpp|ino|arduino)$/.test(language)));
+    });
+  if (!codeSteps.length) return { ok: true, reports: [] };
+
+  const reports: FirmwareBuildReport[] = [];
+  for (const { step, index } of codeSteps) {
+    const originalSource = step.code || '';
+    let source = normalizeArduinoSource(originalSource);
+    const board = inferArduinoBoard(source, componentTypes);
+    let selectedBoard = board;
+
+    if (!selectedBoard) {
+      try {
+        const response = await fetch(`${HARDWARE_API}/flash/boards`, { signal });
+        if (response.ok) {
+          const payload = await response.json();
+          const detected = Array.isArray(payload.ports)
+            ? payload.ports.find((port: { fqbn?: string; board?: string }) => typeof port.fqbn === 'string' && port.fqbn)
+            : undefined;
+          if (detected) selectedBoard = { fqbn: detected.fqbn, name: detected.board || detected.fqbn };
+        }
+      } catch (error) {
+        if (signal.aborted) throw error;
+      }
+    }
+
+    if (!selectedBoard) {
+      reports.push({
+        status: 'unverified', stepName: step.phase || `Code step ${index + 1}`, repairAttempts: 0,
+        note: 'Target board could not be identified. No firmware code was added to the canvas.',
+      });
+      return { ok: false, reports };
+    }
+
+    const compile = async (code: string): Promise<FirmwareCompileResult> => {
+      const runCompile = async () => {
+        const response = await fetch(`${HARDWARE_API}/flash/compile`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code, board: selectedBoard!.fqbn }),
+          signal,
+        });
+        let payload: FirmwareCompileResponse;
+        try { payload = await response.json(); } catch { payload = {}; }
+        if (!response.ok) {
+          const detail = String(payload.detail || payload.error || 'Compiler service is unavailable.');
+          return { ok: false, diagnostics: detail, infrastructureFailure: true, missingLibraries: [] as string[] };
+        }
+        return {
+          ok: payload.status === 'success',
+          diagnostics: String(payload.error || payload.stderr || payload.stdout || 'Compilation failed without diagnostic output.'),
+          infrastructureFailure: /arduino-cli not found|timed out|cannot connect|platform .* not found|board .* not installed|unknown board/i.test(String(payload.error || '')),
+          missingLibraries: Array.isArray(payload.missing_libraries) ? payload.missing_libraries.filter((item: unknown) => typeof item === 'string') : [],
+        };
+      };
+
+      let result = await runCompile();
+      if (!result.ok && result.missingLibraries?.length) {
+        onProgress(`Installing ${result.missingLibraries.length} missing Arduino librar${result.missingLibraries.length === 1 ? 'y' : 'ies'} for ${step.phase || `code step ${index + 1}`}...`);
+        let installed = true;
+        try {
+          for (const library of [...new Set(result.missingLibraries)]) {
+            const response = await fetch(`${HARDWARE_API}/flash/install-library`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ library }),
+              signal,
+            });
+            const payload = await response.json().catch((): FirmwareCompileResponse => ({}));
+            if (!response.ok || payload.status !== 'success') installed = false;
+          }
+        } catch (error) {
+          if (signal.aborted) throw error;
+          installed = false;
+        }
+        if (installed) result = await runCompile();
+        else result = { ...result, infrastructureFailure: true, diagnostics: 'A required Arduino library could not be installed.' };
+      }
+      return { ok: result.ok, diagnostics: result.diagnostics.slice(0, 18_000), infrastructureFailure: result.infrastructureFailure };
+    };
+
+    let repairAttempts = 0;
+    onProgress(`Compiling ${step.phase || `code step ${index + 1}`} for ${selectedBoard.name}...`);
+    let repairLoop: Awaited<ReturnType<typeof runFirmwareRepairLoop>>;
+    try {
+      repairLoop = await runFirmwareRepairLoop({
+        initialSource: source,
+        compile,
+        maxAttempts: MAX_FIRMWARE_REPAIR_ATTEMPTS,
+        onRepairAttempt: attempt => onProgress(`Compiler found an issue; asking ${model} for repair ${attempt} of ${MAX_FIRMWARE_REPAIR_ATTEMPTS}...`),
+        repair: async (currentSource, diagnostics) => {
+          onProgress(`Preparing repair for ${step.phase || `code step ${index + 1}`}...`);
+          const repair = await requestAgent({
+            apiKeys,
+            model,
+            systemPrompt: 'You are an expert Arduino and embedded C++ compiler repair engineer. Return only a complete corrected sketch in one fenced cpp code block. Fix the reported compiler errors while preserving the intended behavior, wiring, pins, and hardware assumptions. Do not claim it is verified; the compiler will test it again.',
+            contents: [{ role: 'user', parts: [{ text: `Target board: ${selectedBoard.name} (${selectedBoard.fqbn})\nUser task: ${step.instruction}\n\nCompiler diagnostics:\n${diagnostics}\n\nCurrent complete sketch:\n\n\`\`\`cpp\n${currentSource}\n\`\`\`` }] }],
+            temperature: 0.1,
+            maxOutputTokens: 16_384,
+            research: false,
+            abortSignal: signal,
+          });
+          const repairedSource = extractRepairedArduinoSource(repair.text);
+          onProgress(`Recompiling repaired code for ${selectedBoard.name}...`);
+          return repairedSource;
+        },
+      });
+    } catch (error) {
+      if (signal.aborted) throw error;
+      reports.push({
+        status: 'unverified', stepName: step.phase || `Code step ${index + 1}`, boardName: selectedBoard.name,
+        repairAttempts, note: 'The compiler or repair service became unavailable. No firmware code was added to the canvas.',
+      });
+      return { ok: false, reports };
+    }
+    source = repairLoop.source;
+    repairAttempts = repairLoop.repairAttempts;
+    const result = repairLoop.result;
+
+    if (!result.ok) {
+      reports.push({
+        status: 'unverified', stepName: step.phase || `Code step ${index + 1}`, boardName: selectedBoard.name,
+        repairAttempts,
+        note: result.infrastructureFailure
+          ? 'The local compiler or repair service became unavailable. No firmware code was added to the canvas.'
+          : `Automatic repair reached ${repairAttempts} attempt${repairAttempts === 1 ? '' : 's'} without a verified build. No firmware code was added to the canvas.`,
+      });
+      return { ok: false, reports };
+    }
+
+    step.code = source;
+    const changes = diffArduinoSource(normalizeArduinoSource(originalSource), source);
+    reports.push({
+      status: 'verified', stepName: step.phase || `Code step ${index + 1}`, boardName: selectedBoard.name,
+      repairAttempts, changes: changes.length ? changes : undefined,
+    });
+  }
+  return { ok: true, reports };
+}
 
 // --- Subcomponents ---
 
@@ -215,6 +413,38 @@ function WorkAccordion({ actions, timeMs, active = false, currentActivity, start
           </motion.div>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+function FirmwareBuildSummary({ builds }: { builds: FirmwareBuildReport[] }) {
+  return (
+    <div className="mb-2 mt-2 w-full max-w-[95%] space-y-2">
+      {builds.map((build, index) => (
+        <section key={`${build.stepName}-${index}`} className={`border-l-2 pl-2.5 ${build.status === 'verified' ? 'border-emerald-700' : 'border-amber-700'}`}>
+          <p className={`flex items-center gap-1.5 text-[11px] ${build.status === 'verified' ? 'text-emerald-300' : 'text-amber-300'}`}>
+            {build.status === 'verified' ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+            <span className="font-medium">{build.status === 'verified' ? 'Firmware build verified' : 'Firmware held back'}</span>
+            {build.boardName && <span className="text-gray-500">· {build.boardName}</span>}
+            {build.repairAttempts > 0 && <span className="text-gray-500">· {build.repairAttempts} repair{build.repairAttempts === 1 ? '' : 's'}</span>}
+          </p>
+          {build.note && <p className="mt-1 text-[11px] leading-relaxed text-gray-400">{build.note}</p>}
+          {build.changes && build.changes.length > 0 && (
+            <details className="mt-1.5">
+              <summary className="w-fit cursor-pointer text-[11px] text-gray-400 hover:text-gray-200">Code changes ({build.changes.filter(change => change.kind === 'added').length} added, {build.changes.filter(change => change.kind === 'removed').length} removed)</summary>
+              <div className="mt-1 max-h-64 overflow-auto rounded border border-gray-800 bg-[#0a0a0a] py-1 font-mono text-[10px]">
+                {build.changes.slice(0, 200).map((change, changeIndex) => (
+                  <div key={`${change.kind}-${change.line}-${changeIndex}`} className={`whitespace-pre-wrap break-all px-2 ${change.kind === 'added' ? 'bg-emerald-950/40 text-emerald-300' : 'bg-red-950/30 text-red-300'}`}>
+                    <span className="mr-2 inline-block w-14 text-right text-gray-600">{change.kind === 'added' ? `+${change.line}` : `-${change.line}`}</span>
+                    <span className="mr-1">{change.kind === 'added' ? '+' : '-'}</span>{change.text || ' '}
+                  </div>
+                ))}
+                {build.changes.length > 200 && <p className="px-2 py-1 text-gray-500">Showing first 200 changed lines.</p>}
+              </div>
+            </details>
+          )}
+        </section>
+      ))}
     </div>
   );
 }
@@ -651,7 +881,7 @@ export function ChatBox({ apiKeys, model, onExecuteCommand, onUpdateCircuit, onS
       let replyText = agentReply.text;
       let tutorialResponse = extractTutorialResponse(replyText);
       let extractedPlanResponse = extractProjectPlanResponse(replyText);
-      const isCanvasBuildRequest = Boolean(workflowOverride) || /\b(build|make|design|wire|create|construct|assemble|implement|prototype|draw|diagram)\b/i.test(userMsg);
+      const isCanvasBuildRequest = Boolean(workflowOverride) || isCanvasMutationRequest(userMsg);
 
       if (isCanvasBuildRequest && !tutorialResponse.plan && (workflowOverride || !extractedPlanResponse.plan)) {
         try {
@@ -769,8 +999,10 @@ RULES:
         }
       }
 
-      // 3. Parse Tutorial JSON using protocol
+      // 3. Parse and compile-check Arduino firmware before committing the circuit update.
       let tutorialData: ParsedTutorial | undefined;
+      let firmwareBuilds: FirmwareBuildReport[] | undefined;
+      let firmwareValidationBlocked = false;
       if (tutorialResponse.plan && onUpdateCircuit && (!proposedPlan || workflowOverride)) {
         const phaseName = workflowOverride?.plan.subsystems[workflowOverride.phaseIndex]?.name;
         const parsed = workflowOverride && phaseName
@@ -781,34 +1013,65 @@ RULES:
             allTabs?.find(tab => tab.isActive)?.name || '',
             (currentStep || 0) + 1,
           );
-        tutorialData = {
-          action: parsed.action,
-          target_tab: parsed.target_tab,
-          projectName: parsed.project_name,
-          description: parsed.description,
-          blueprint_svg: parsed.blueprint_svg,
-          stepsCount: parsed.steps.length,
-          componentsCount: parsed.steps.reduce((acc, step) => acc + (step.add_components?.length || 0), 0),
-          connectionsCount: parsed.steps.reduce((acc, step) => acc + (step.add_wiring?.length || 0), 0),
-          codeSteps: parsed.steps.filter(s => !!s.code).length,
-          phases: Array.from(new Set(parsed.steps.map(s => s.phase).filter(Boolean))) as string[],
-          steps: parsed.steps.map(s => ({
-            instruction: s.instruction || '',
-            phase: s.phase,
-            add_components: s.add_components,
-            add_wiring: s.add_wiring,
-            remove_components: s.remove_components,
-            remove_wiring: s.remove_wiring,
-            hasComponents: !!(s.add_components?.length),
-            hasWiring: !!(s.add_wiring?.length),
-            hasCode: !!s.code,
-            hasVerify: !!s.verify
-          }))
-        };
 
-        setProcessingActivity(`Updating ${parsed.target_tab || 'the active workspace'} with ${parsed.steps.length} checked steps...`);
-        onUpdateCircuit(parsed, workflowOverride?.targetTabId || activeTabId);
-        recordProgress(`Updated ${parsed.target_tab || 'the active workspace'} with ${parsed.steps.length} step${parsed.steps.length === 1 ? '' : 's'}.`, 'edit');
+        const isNewProjectTab = parsed.action === 'NEW_PROJECT' || parsed.action === 'NEW_TAB';
+        const activeTabName = allTabs?.find(tab => tab.isActive)?.name;
+        const relevantTabs = (allTabs || []).filter(tab => parsed.target_tab ? tab.name === parsed.target_tab : tab.isActive);
+        const includeActiveCircuit = !isNewProjectTab && (!parsed.target_tab || parsed.target_tab === activeTabName);
+        const projectComponentTypes = [
+          ...parsed.steps.flatMap(step => (step.add_components || []).map(component => `${component.type || ''} ${component.label || ''}`)),
+          ...(includeActiveCircuit ? componentTypesFromSteps(circuitData?.steps) : []),
+          ...(!isNewProjectTab ? relevantTabs.flatMap(tab => tab.components.map(component => component.type)) : []),
+        ];
+        const firmwareValidation = await validateGeneratedFirmware({
+          plan: parsed,
+          apiKeys,
+          model,
+          signal: abortControllerRef.current.signal,
+          componentTypes: projectComponentTypes,
+          onProgress: text => {
+            setProcessingActivity(text);
+            recordProgress(text, 'progress');
+          },
+        });
+        firmwareBuilds = firmwareValidation.reports.length ? firmwareValidation.reports : undefined;
+        firmwareValidationBlocked = !firmwareValidation.ok;
+
+        if (firmwareValidationBlocked) {
+          recordProgress('Firmware was held back because it did not pass the automatic build check.', 'explore');
+        }
+
+        if (!firmwareValidationBlocked) {
+          tutorialData = {
+            action: parsed.action,
+            target_tab: parsed.target_tab,
+            projectName: parsed.project_name,
+            description: parsed.description,
+            blueprint_svg: parsed.blueprint_svg,
+            stepsCount: parsed.steps.length,
+            componentsCount: parsed.steps.reduce((acc, step) => acc + (step.add_components?.length || 0), 0),
+            connectionsCount: parsed.steps.reduce((acc, step) => acc + (step.add_wiring?.length || 0), 0),
+            codeSteps: parsed.steps.filter(s => !!s.code).length,
+            codeQualityWarnings: tutorialResponse.warnings.filter(warning => warning.startsWith('Code review ')),
+            phases: Array.from(new Set(parsed.steps.map(s => s.phase).filter(Boolean))) as string[],
+            steps: parsed.steps.map(s => ({
+              instruction: s.instruction || '',
+              phase: s.phase,
+              add_components: s.add_components,
+              add_wiring: s.add_wiring,
+              remove_components: s.remove_components,
+              remove_wiring: s.remove_wiring,
+              hasComponents: !!(s.add_components?.length),
+              hasWiring: !!(s.add_wiring?.length),
+              hasCode: !!s.code,
+              hasVerify: !!s.verify
+            }))
+          };
+
+          setProcessingActivity(`Updating ${parsed.target_tab || 'the active workspace'} with ${parsed.steps.length} checked steps...`);
+          onUpdateCircuit(parsed, workflowOverride?.targetTabId || activeTabId);
+          recordProgress(`Updated ${parsed.target_tab || 'the active workspace'} with ${parsed.steps.length} step${parsed.steps.length === 1 ? '' : 's'}.`, 'edit');
+        }
       } else if (tutorialResponse.errors.length > 0 && isCanvasBuildRequest) {
         console.warn('Canvas response did not validate:', tutorialResponse.errors);
       }
@@ -822,13 +1085,16 @@ RULES:
 
       // 6. Get Clean Text
       let cleanText = proposedPlan ? extractedPlanResponse.cleanText : tutorialResponse.cleanText;
+      if (firmwareValidationBlocked) {
+        cleanText = 'I held the firmware back because it did not pass the automatic build check. The compiler output stayed hidden; review the board selection and try again.';
+      }
       if (isCanvasBuildRequest && !proposedPlan && !tutorialData) {
         cleanText = cleanText.replace(/```json[\s\S]*?```/gi, '').trim();
       }
       if (proposedPlan && !agentReply.researched) {
         cleanText += '\n\nSearch returned no attributable sources for this response. Treat part-specific values as provisional until verified against the manufacturer documentation.';
       }
-      const canvasWarning = isCanvasBuildRequest && !proposedPlan && !tutorialData
+      const canvasWarning = !firmwareValidationBlocked && isCanvasBuildRequest && !proposedPlan && !tutorialData
         ? 'Canvas was not changed because the model did not return a valid component-and-step payload. The app tried one format repair; review the answer and retry when the model is available.'
         : undefined;
 
@@ -839,7 +1105,7 @@ RULES:
 
       setMessages(prev => [...prev, { 
         role: 'assistant',
-        content: proposedPlan ? 'Implementation plan opened in its workspace tab.' : replyText,
+        content: firmwareValidationBlocked ? cleanText : proposedPlan ? 'Implementation plan opened in its workspace tab.' : replyText,
         cleanText: proposedPlan ? '' : cleanText,
         createdAt: Date.now(),
         commands, 
@@ -857,6 +1123,7 @@ RULES:
         phaseTargetTabId: workflowOverride?.targetTabId,
         phaseStartApproach: workflowOverride?.startApproach,
         canvasWarning,
+        firmwareBuilds,
       }]);
 
     } catch (error: any) {
@@ -979,6 +1246,9 @@ RULES:
             
             {msg.role === 'assistant' && msg.workActions && msg.workActions.length > 0 && (
               <WorkAccordion actions={msg.workActions} timeMs={msg.workTimeMs} />
+            )}
+            {msg.role === 'assistant' && msg.firmwareBuilds && msg.firmwareBuilds.length > 0 && (
+              <FirmwareBuildSummary builds={msg.firmwareBuilds} />
             )}
 
             <div className={`max-w-[90%] ${msg.role === 'user' ? 'bg-[#2a2a2a] text-white rounded-2xl rounded-tr-sm px-4 py-2 shadow-md' : 'text-gray-300'}`}>
@@ -1174,6 +1444,14 @@ RULES:
                         <span key={p} className="bg-gray-800/50 px-1.5 py-0.5 rounded text-gray-400">{p}</span>
                       ))}
                     </div>
+                    {(msg.tutorialData.codeQualityWarnings?.length ?? 0) > 0 && (
+                      <div role="status" className="mt-3 border-t border-amber-900/40 pt-2 text-[11px] leading-relaxed text-amber-300/90">
+                        <p className="mb-1 font-medium">Code review notes</p>
+                        {(msg.tutorialData.codeQualityWarnings ?? []).map((warning, index) => (
+                          <p key={`${index}-${warning}`}>{warning.replace(/^Code review \(step \d+\):\s*/, '')}</p>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

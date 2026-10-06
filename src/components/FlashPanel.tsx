@@ -46,6 +46,7 @@ export function FlashPanel({ code, onClose }: FlashPanelProps) {
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [showBoardDropdown, setShowBoardDropdown] = useState(false);
   const [binarySize, setBinarySize] = useState(0);
+  const [autoScroll, setAutoScroll] = useState(true);
   const serialRef = useRef<EventSource | null>(null);
   const serialContainerRef = useRef<HTMLDivElement>(null);
 
@@ -56,12 +57,13 @@ export function FlashPanel({ code, onClose }: FlashPanelProps) {
     detectBoards();
   }, []);
 
-  // Auto-scroll serial monitor
+  // Auto-scroll serial monitor if enabled
   useEffect(() => {
-    if (serialContainerRef.current) {
-      serialContainerRef.current.scrollTop = serialContainerRef.current.scrollHeight;
+    if (autoScroll && serialContainerRef.current) {
+      const container = serialContainerRef.current;
+      container.scrollTop = container.scrollHeight;
     }
-  }, [serialLines]);
+  }, [serialLines, autoScroll]);
 
   const detectBoards = useCallback(async () => {
     setStage('detecting');
@@ -191,9 +193,13 @@ export function FlashPanel({ code, onClose }: FlashPanelProps) {
     setIsMonitoring(true);
     setSerialLines([]);
     setStage('monitoring');
-    setStatusText(`Serial Monitor — ${selectedPort} @ 9600 baud`);
+    
 
-    const eventSource = new EventSource(`${API}/flash/serial-monitor?port=${encodeURIComponent(selectedPort)}&baud=9600`);
+    // Auto-detect baud rate from code, default to 115200 for ESP32 or 9600 for others
+    const baudMatch = code.match(/Serial\.begin\(\s*(\d+)\s*\)/);
+    const baudRate = baudMatch ? baudMatch[1] : (selectedBoard.includes('esp32') ? '115200' : '9600');
+    setStatusText(`Serial Monitor — ${selectedPort} @ ${baudRate} baud`);
+    const eventSource = new EventSource(`${API}/flash/serial-monitor?port=${encodeURIComponent(selectedPort)}&baud=${baudRate}`);
     serialRef.current = eventSource;
 
     eventSource.onmessage = (event) => {
@@ -233,12 +239,12 @@ export function FlashPanel({ code, onClose }: FlashPanelProps) {
 
   const stageColor = {
     idle: 'text-gray-400',
-    detecting: 'text-yellow-400',
-    compiling: 'text-blue-400',
-    uploading: 'text-orange-400',
-    success: 'text-green-400',
-    error: 'text-red-400',
-    monitoring: 'text-cyan-400',
+    detecting: 'text-gray-300',
+    compiling: 'text-gray-300',
+    uploading: 'text-gray-200',
+    success: 'text-white',
+    error: 'text-gray-400',
+    monitoring: 'text-white',
   };
 
   return (
@@ -252,7 +258,7 @@ export function FlashPanel({ code, onClose }: FlashPanelProps) {
       {/* Header */}
       <div className="h-9 border-b border-[#1e3a5f] bg-[#161b22] flex items-center justify-between px-4">
         <div className="flex items-center gap-2">
-          <Zap size={14} className="text-yellow-500" />
+          <Zap size={14} className="text-white" />
           <span className="text-xs font-bold text-gray-200">1-Click Flash</span>
           <span className={`text-[10px] font-mono ${stageColor[stage]}`}>
             {stage === 'compiling' && '● COMPILING'}
@@ -336,9 +342,9 @@ export function FlashPanel({ code, onClose }: FlashPanelProps) {
               onClick={handleCompileAndFlash}
               disabled={!selectedPort || !selectedBoard || stage === 'compiling' || stage === 'uploading'}
               className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all
-                bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500
-                text-white shadow-lg shadow-green-900/30
-                disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:from-green-600"
+                bg-white hover:bg-gray-200
+                text-black shadow-lg
+                disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-white"
             >
               {stage === 'compiling' || stage === 'uploading' ? (
                 <Loader2 size={14} className="animate-spin" />
@@ -349,7 +355,7 @@ export function FlashPanel({ code, onClose }: FlashPanelProps) {
               )}
               {stage === 'compiling' ? 'Compiling...' :
                stage === 'uploading' ? 'Uploading...' :
-               stage === 'success' ? 'Done!' : '⚡ Flash'}
+               stage === 'success' ? '⚡ Flash Again' : '⚡ Flash'}
             </button>
             
             <button
@@ -357,8 +363,8 @@ export function FlashPanel({ code, onClose }: FlashPanelProps) {
               disabled={!selectedPort}
               className={`px-3 py-2 rounded-lg text-xs font-bold transition-all border
                 ${isMonitoring 
-                  ? 'bg-red-600/20 border-red-600 text-red-400 hover:bg-red-600/30' 
-                  : 'bg-[#21262d] border-[#30363d] text-gray-300 hover:border-cyan-500 hover:text-cyan-400'}
+                  ? 'bg-gray-800 border-gray-600 text-white hover:bg-gray-700' 
+                  : 'bg-[#1a1a1a] border-gray-800 text-gray-400 hover:border-gray-500 hover:text-white'}
                 disabled:opacity-30 disabled:cursor-not-allowed`}
               title="Serial Monitor"
             >
@@ -370,7 +376,7 @@ export function FlashPanel({ code, onClose }: FlashPanelProps) {
           {(stage === 'compiling' || stage === 'uploading') && (
             <div className="w-full bg-[#21262d] rounded-full h-1.5 overflow-hidden">
               <motion.div
-                className="h-full rounded-full bg-gradient-to-r from-blue-500 to-green-500"
+                className="h-full rounded-full bg-white shadow-[0_0_10px_rgba(255,255,255,0.5)]"
                 initial={{ width: '0%' }}
                 animate={{ width: `${progress}%` }}
                 transition={{ duration: 0.5 }}
@@ -392,12 +398,16 @@ export function FlashPanel({ code, onClose }: FlashPanelProps) {
           {stage === 'monitoring' ? (
             /* Serial Monitor */
             <div className="flex-1 flex flex-col">
-              <div className="h-7 bg-[#161b22] border-b border-[#1e3a5f] flex items-center px-3 text-[10px] text-cyan-400 gap-2">
+              <div className="h-7 bg-[#1a1a1a] border-b border-gray-800 flex items-center px-3 text-[10px] text-gray-300 gap-2">
                 <MonitorSpeaker size={11} />
-                <span>Serial Monitor — {selectedPort} @ 9600 baud</span>
-                <span className="text-gray-600 ml-auto">{serialLines.length} lines</span>
+                <span>Serial Monitor — {selectedPort} (Auto-baud)</span>
+                <label className="ml-auto flex items-center gap-1 cursor-pointer text-gray-500 hover:text-gray-300">
+                  <input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} className="w-2.5 h-2.5 accent-white" />
+                  Auto-scroll
+                </label>
+                <span className="text-gray-600 ml-3">{serialLines.length} lines</span>
               </div>
-              <div ref={serialContainerRef} className="flex-1 overflow-y-auto p-2 font-mono text-[11px] text-green-400 bg-black/40">
+              <div ref={serialContainerRef} className="flex-1 overflow-y-auto p-3 font-mono text-[11px] text-gray-200 bg-[#0a0a0a]">
                 {serialLines.length === 0 ? (
                   <span className="text-gray-600">Waiting for data...</span>
                 ) : (
@@ -419,6 +429,19 @@ export function FlashPanel({ code, onClose }: FlashPanelProps) {
                     <AlertTriangle size={12} /> Compilation Error
                   </div>
                   {errorText}
+                </div>
+              ) : stage === 'success' ? (
+                <div className="flex flex-col items-center justify-center h-full text-white gap-3">
+                  <div className="bg-gray-800 border border-gray-700 p-3 rounded-full">
+                    <Check size={36} strokeWidth={2} />
+                  </div>
+                  <div className="text-center">
+                    <p className="text-sm font-bold text-white">Successfully Flashed!</p>
+                    <p className="text-xs text-gray-400 mt-2">Code is now running on your board.</p>
+                    <button onClick={startSerialMonitor} className="mt-4 px-4 py-1.5 bg-gray-900 border border-gray-700 text-gray-300 hover:text-white hover:border-gray-500 rounded-lg flex items-center gap-2 mx-auto transition-colors">
+                      <Terminal size={12} /> Open Serial Monitor
+                    </button>
+                  </div>
                 </div>
               ) : compileOutput ? (
                 <div className="text-gray-400 whitespace-pre-wrap leading-relaxed">
