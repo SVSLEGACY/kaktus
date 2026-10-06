@@ -91,7 +91,7 @@ export function FlashPanel({ code, onClose }: FlashPanelProps) {
       setStage('idle');
     } catch (e) {
       setStage('error');
-      setErrorText('Cannot connect to backend. Is the server running on port 8000?');
+      setErrorText('Cannot connect to backend. Please download and start Kaktus Desktop Agent to flash your Arduino.?');
     }
   }, []);
 
