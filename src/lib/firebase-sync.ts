@@ -27,10 +27,10 @@ export async function loadFromFirebase(uid: string) {
     localStorage.setItem(CHAT_SESSION_REGISTRY_KEY(uid), registryStr); 
     
     const wsSnap = await getDocs(collection(db, 'users', uid, 'workspaces')); 
-    wsSnap.forEach(d => localStorage.setItem(workspaceSessionKey(d.id, uid), d.data().payload)); 
+    wsSnap.forEach((d: any) => localStorage.setItem(workspaceSessionKey(d.id, uid), d.data().payload)); 
     
     const chatSnap = await getDocs(collection(db, 'users', uid, 'chats')); 
-    chatSnap.forEach(d => localStorage.setItem(chatSessionKey(d.id, uid), d.data().payload)); 
+    chatSnap.forEach((d: any) => localStorage.setItem(chatSessionKey(d.id, uid), d.data().payload)); 
     
     return true; 
   } catch(e) { 

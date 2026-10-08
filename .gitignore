@@ -45,6 +45,7 @@ next-env.d.ts
 
 *.js
 *.py
+!backend/main.py
 *.txt
 !server.js
 !next.config.js

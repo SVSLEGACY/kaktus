@@ -1,6 +1,9 @@
 'use client';
 import Link from 'next/link';
 import { useAuth } from '@/components/AuthProvider';
+import { LogOut } from 'lucide-react';
+import { auth } from '@/lib/firebase';
+import { signOut } from 'firebase/auth';
 
 export default function HowToUsePage() {
   const { user } = useAuth();
@@ -9,23 +12,36 @@ export default function HowToUsePage() {
       
       {/* Navbar */}
       <header className="fixed top-0 left-0 right-0 h-20 flex items-center justify-between px-6 md:px-12 z-50 bg-white/90 backdrop-blur-md border-b border-gray-100">
-        <Link href="/" className="flex items-center gap-2">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-            <defs>
-              <linearGradient id="logoGrad" x1="0" y1="24" x2="24" y2="0" gradientUnits="userSpaceOnUse">
-                <stop offset="0%" stopColor="#eab308" />
-                <stop offset="50%" stopColor="#22c55e" />
-                <stop offset="100%" stopColor="#f97316" />
-              </linearGradient>
-            </defs>
-            <g stroke="url(#logoGrad)">
-              <path d="M12 22V4" />
-              <path d="M12 14H9a2 2 0 0 1-2-2V8" />
-              <path d="M12 10h3a2 2 0 0 0 2-2V5" />
-            </g>
-          </svg>
-          <span className="font-semibold text-lg tracking-tight">Kaktus</span>
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link href="/" className="flex items-center gap-2">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+              <defs>
+                <linearGradient id="logoGrad" x1="0" y1="24" x2="24" y2="0" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stopColor="#eab308" />
+                  <stop offset="50%" stopColor="#22c55e" />
+                  <stop offset="100%" stopColor="#f97316" />
+                </linearGradient>
+              </defs>
+              <g stroke="url(#logoGrad)">
+                <path d="M12 22V4" />
+                <path d="M12 14H9a2 2 0 0 1-2-2V8" />
+                <path d="M12 10h3a2 2 0 0 0 2-2V5" />
+              </g>
+            </svg>
+            <span className="font-semibold text-lg tracking-tight">Kaktus</span>
+          </Link>
+
+          {user && (
+            <button
+              onClick={() => signOut(auth)}
+              className="flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-gray-600 hover:text-red-600 bg-gray-100/90 hover:bg-red-50 border border-gray-200 hover:border-red-200 rounded-full transition-all shadow-xs cursor-pointer"
+              title={`Logged in as ${user.email || 'User'} - Click to Logout`}
+            >
+              <LogOut size={13} />
+              <span>Log out</span>
+            </button>
+          )}
+        </div>
         
         <nav className="hidden lg:flex items-center gap-10 text-sm font-medium text-gray-500">
           <Link href="/app-info" className="hover:text-black transition-colors">App Info</Link>

@@ -44,7 +44,7 @@ export default function AdminPanel() {
           if (stored) {
             try {
               const keys = JSON.parse(stored);
-              migrated = keys.map((k, i) => ({ key: k, label: 'My Key ' + (i+1), status: 'active', addedAt: new Date().toISOString() }));
+              migrated = keys.map((k: any, i: number) => ({ key: k, label: 'My Key ' + (i+1), status: 'active', addedAt: new Date().toISOString() }));
             } catch(e) {}
           } else if (oldKey) {
             migrated = [{ key: oldKey, label: 'My Key 1', status: 'active', addedAt: new Date().toISOString() }];

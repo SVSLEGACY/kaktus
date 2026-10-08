@@ -49,7 +49,7 @@ export const submitPaymentVerification = async (uid: string, email: string | nul
 export const getPendingPayments = async (): Promise<PaymentTransaction[]> => {
   const q = query(collection(db, 'payments'), where("status", "==", "pending"));
   const snapshot = await getDocs(q);
-  return snapshot.docs.map(doc => doc.data() as PaymentTransaction);
+  return snapshot.docs.map((doc: any) => doc.data() as PaymentTransaction);
 };
 
 export const approvePayment = async (txn: PaymentTransaction) => {

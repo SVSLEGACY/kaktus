@@ -10,6 +10,7 @@ import {
   ChevronDown, Box, Cpu, Zap, Radio, ToggleLeft, Disc, Package, Settings
 } from 'lucide-react';
 import Link from 'next/link';
+import { getApiPool } from '@/lib/admin';
 
 const PCBCanvas = dynamic(() => import('@/components/PCBCanvas').then((mod) => mod.PCBCanvas), { ssr: false });
 
@@ -62,7 +63,7 @@ export default function PCBDesignerPage() {
     useEffect(() => {
       getApiPool().then(pool => {
         if (pool && pool.length > 0) {
-          setApiKeys(pool.map(p => p.key));
+          setApiKeys(pool.map((p: any) => p.key));
         } else {
           const stored = localStorage.getItem('gemini_api_keys');
           if (stored) {

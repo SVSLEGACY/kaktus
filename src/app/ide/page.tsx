@@ -9,7 +9,7 @@ import { ChatBox, ImplementationPlanCard } from '@/components/ChatBox';
 import { ModelSelector } from '@/components/ModelSelector';
 import type { TerminalRef } from '@/components/Terminal';
 import type { TutorialData } from '@/components/CircuitCanvas';
-import { TerminalSquare, X, Layers, Cpu, Cable, Zap, CircuitBoard, Usb, Settings, Upload, Trash2, Circle } from 'lucide-react';
+import { TerminalSquare, X, Layers, Cpu, Cable, Zap, CircuitBoard, Usb, Settings, Upload, Trash2, Circle, LogOut } from 'lucide-react';
 import { FlashPanel } from '@/components/FlashPanel';
 import { extractProjectPlanResponse } from '@/lib/agent/protocol';
 import type { PlanBuildAction, ProjectPlan, ResearchSource } from '@/lib/agent/protocol';
@@ -513,6 +513,16 @@ export default function Home() {
             <button className="px-3 h-full flex items-center hover:bg-[#333333] rounded-md transition-colors">
               File
             </button>
+            {user && (
+              <button 
+                onClick={() => { router.push('/'); setTimeout(() => signOut(auth), 100); }}
+                className="px-2 h-full flex items-center hover:bg-red-950/40 text-gray-400 hover:text-red-400 rounded-md transition-colors gap-1 text-[12px]"
+                title="Log out"
+              >
+                <LogOut size={12} />
+                <span>Logout</span>
+              </button>
+            )}
             <button 
               onClick={() => setIsTerminalOpen(!isTerminalOpen)}
               className={`px-3 h-full flex items-center hover:bg-[#333333] rounded-md transition-colors ${isTerminalOpen ? 'bg-[#333333] text-white' : ''}`}

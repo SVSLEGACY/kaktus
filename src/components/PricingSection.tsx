@@ -39,13 +39,13 @@ export function PricingSection() {
   }, []);
 
   const handlePlanClick = (planId: string, planName: string, price: string) => {
-    if (planId === 'free') {
-      router.push(user ? '/ide' : '/login?redirect=/ide');
+    if (!user) {
+      router.push(planId === 'free' ? '/login?redirect=/ide' : '/login?redirect=/#pricing');
       return;
     }
-    
-    if (!user) {
-      router.push('/login?redirect=/#pricing');
+
+    if (planId === 'free') {
+      router.push('/ide');
       return;
     }
 
@@ -56,11 +56,16 @@ export function PricingSection() {
   };
 
   const handleSubmitTxn = async () => {
+    if (!user) {
+      setError('Please login first to submit your payment verification.');
+      router.push('/login?redirect=/#pricing');
+      return;
+    }
+
     if (!txnId.trim()) {
       setError('Please enter the UPI Transaction ID (UTR)');
       return;
     }
-    if (!user) return;
 
     setSubmitting(true);
     setError('');
@@ -109,13 +114,13 @@ export function PricingSection() {
             <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-green-500 text-white px-4 py-1 rounded-full text-sm font-bold tracking-wide">TESTING</div>
             <h3 className="text-2xl font-bold mb-2">Starter</h3>
             <p className="text-gray-500 mb-6">Try the full power for a week.</p>
-            <div className="text-5xl font-black mb-8">₹1<span className="text-lg text-gray-400 font-normal">/week</span></div>
+            <div className="text-5xl font-black mb-8">₹29<span className="text-lg text-gray-400 font-normal">/week</span></div>
             <ul className="flex flex-col gap-4 mb-8 flex-grow">
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-medium">Unlimited Flash</span></li>
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-bold text-black">10 Pro Runs</span></li>
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">Complex Reasoning</span></li>
             </ul>
-            <button onClick={() => handlePlanClick('starter', 'Starter', '1')} className="w-full py-4 text-center rounded-xl bg-green-500 text-white font-bold hover:bg-green-600 transition-colors shadow-md">
+            <button onClick={() => handlePlanClick('starter', 'Starter', '29')} className="w-full py-4 text-center rounded-xl bg-green-500 text-white font-bold hover:bg-green-600 transition-colors shadow-md">
               Start Trial
             </button>
           </FadeIn>
@@ -139,13 +144,13 @@ export function PricingSection() {
           <FadeIn delay={0.4} className="flex flex-col p-8 bg-gray-50 rounded-3xl border border-gray-100 shadow-sm relative">
             <h3 className="text-2xl font-bold mb-2">Pro</h3>
             <p className="text-gray-500 mb-6">For serious builders and engineers.</p>
-            <div className="text-5xl font-black mb-8">₹139<span className="text-lg text-gray-400 font-normal">/mo</span></div>
+            <div className="text-5xl font-black mb-8">₹159<span className="text-lg text-gray-400 font-normal">/mo</span></div>
             <ul className="flex flex-col gap-4 mb-8 flex-grow">
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-medium">Unlimited Flash</span></li>
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-bold text-black">50 Pro Runs</span></li>
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">Priority Processing</span></li>
             </ul>
-            <button onClick={() => handlePlanClick('pro', 'Pro', '139')} className="w-full py-4 text-center rounded-xl bg-gray-900 text-white font-bold hover:bg-black transition-colors">
+            <button onClick={() => handlePlanClick('pro', 'Pro', '159')} className="w-full py-4 text-center rounded-xl bg-gray-900 text-white font-bold hover:bg-black transition-colors">
               Upgrade
             </button>
           </FadeIn>
@@ -185,41 +190,50 @@ export function PricingSection() {
                   <div className="flex flex-col items-center bg-gray-50 p-6 rounded-2xl border border-gray-100 mb-6">
                     <p className="text-sm text-gray-500 mb-4 font-medium uppercase tracking-wider">Scan & Pay via UPI</p>
                     
-                    {paymentSettings?.upiQrUrl ? (
-                      <img src={paymentSettings.upiQrUrl} alt="UPI QR Code" className="w-48 h-48 object-contain mb-4 rounded-xl border border-gray-200 bg-white p-2 shadow-sm" />
-                    ) : (
-                      <div className="w-48 h-48 bg-gray-200 animate-pulse rounded-xl mb-4 flex items-center justify-center border border-gray-300">
-                        <span className="text-gray-400 text-xs">Admin hasn't set QR</span>
-                      </div>
-                    )}
+                    <img src="/qr-code.png" alt="UPI QR Code" className="w-56 h-56 object-contain mb-4 rounded-xl border border-gray-200 bg-white p-2 shadow-sm" />
 
-                    <div className="text-center">
-                      <p className="text-xs text-gray-400 mb-1">Or pay to UPI ID:</p>
-                      <p className="font-mono text-black font-semibold bg-gray-200 px-3 py-1 rounded select-all">
-                        {paymentSettings?.upiId || 'Not set by admin'}
-                      </p>
+                    <div className="w-full flex items-center gap-3 bg-white p-3 rounded-xl border border-gray-100 shadow-sm mb-2 text-left">
+                      <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center flex-shrink-0">
+                        <span className="text-xl">🏦</span>
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-semibold text-black leading-tight">Svc Co-operative Bank Ltd</p>
+                        <p className="text-xs text-gray-500">X00213 • Primary</p>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="flex flex-col gap-2">
-                    <label className="text-sm font-semibold text-gray-700">UPI Transaction ID (UTR)</label>
-                    <input 
-                      type="text" 
-                      value={txnId} 
-                      onChange={e => setTxnId(e.target.value)} 
-                      placeholder="e.g. 312345678901"
-                      className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:border-green-500 focus:ring-2 focus:ring-green-200 outline-none transition-all text-black"
-                    />
-                    {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
-                    
-                    <button 
-                      onClick={handleSubmitTxn}
-                      disabled={submitting}
-                      className="w-full mt-4 bg-green-500 hover:bg-green-600 text-white font-bold py-3.5 rounded-xl transition-colors shadow-md flex items-center justify-center"
-                    >
-                      {submitting ? <Loader2 className="w-5 h-5 animate-spin" /> : "Submit Verification"}
-                    </button>
-                  </div>
+                  {!user ? (
+                    <div className="flex flex-col gap-2 mt-2">
+                      <p className="text-sm text-gray-600 text-center mb-2">You must be logged in to submit a payment.</p>
+                      <button 
+                        onClick={() => router.push('/login?redirect=/#pricing')}
+                        className="w-full bg-gray-900 hover:bg-black text-white font-bold py-3.5 rounded-xl transition-colors shadow-md flex items-center justify-center"
+                      >
+                        Log In to Continue
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      <label className="text-sm font-semibold text-gray-700">UPI Transaction ID (UTR)</label>
+                      <input 
+                        type="text" 
+                        value={txnId} 
+                        onChange={e => setTxnId(e.target.value)} 
+                        placeholder="e.g. 312345678901"
+                        className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:border-green-500 focus:ring-2 focus:ring-green-200 outline-none transition-all text-black"
+                      />
+                      {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
+                      
+                      <button 
+                        onClick={handleSubmitTxn}
+                        disabled={submitting}
+                        className="w-full mt-4 bg-green-500 hover:bg-green-600 text-white font-bold py-3.5 rounded-xl transition-colors shadow-md flex items-center justify-center"
+                      >
+                        {submitting ? <Loader2 className="w-5 h-5 animate-spin" /> : "Submit Verification"}
+                      </button>
+                    </div>
+                  )}
                 </>
               )}
             </motion.div>

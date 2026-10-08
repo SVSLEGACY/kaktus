@@ -8,7 +8,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 
 const dev = process.env.NODE_ENV !== 'production';
-const app = next({ dev });
+const app = next({ dev, webpack: true });
 const handle = app.getRequestHandler();
 
 app.prepare().then(() => {
