@@ -9,7 +9,7 @@ import { ChatBox, ImplementationPlanCard } from '@/components/ChatBox';
 import { ModelSelector } from '@/components/ModelSelector';
 import type { TerminalRef } from '@/components/Terminal';
 import type { TutorialData } from '@/components/CircuitCanvas';
-import { TerminalSquare, X, Layers, Cpu, Cable, Zap, CircuitBoard, Usb, Settings, Upload, Trash2, Circle, LogOut, ShieldAlert } from 'lucide-react';
+import { TerminalSquare, X, Layers, Cpu, Cable, Zap, CircuitBoard, Usb, Settings, Upload, Trash2, Circle, LogOut, ShieldAlert, AlertTriangle } from 'lucide-react';
 import { FlashPanel } from '@/components/FlashPanel';
 import { extractProjectPlanResponse } from '@/lib/agent/protocol';
 import type { PlanBuildAction, ProjectPlan, ResearchSource } from '@/lib/agent/protocol';
@@ -71,7 +71,7 @@ const CircuitCanvas = dynamic(() => import('@/components/CircuitCanvas').then((m
 
 export default function Home() {
   const router = useRouter();
-  const { user, loading: authLoading, plan } = useAuth();
+  const { user, loading: authLoading, plan, planExpiresAt } = useAuth();
   const tokenLimit = plan === 'free' ? 100000 : 200000;
   const [apiKeys, setApiKeys] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
@@ -94,10 +94,11 @@ export default function Home() {
         if (usageRaw) {
           const usage = JSON.parse(usageRaw);
           let totalStoredTokens = 0;
-          for (const date in usage) {
-            for (const key in usage[date]) {
-              for (const model in usage[date][key]) {
-                totalStoredTokens += usage[date][key][model];
+          const today = new Date().toISOString().split('T')[0];
+          if (usage[today]) {
+            for (const key in usage[today]) {
+              for (const model in usage[today][key]) {
+                totalStoredTokens += usage[today][key][model];
               }
             }
           }
@@ -527,7 +528,14 @@ export default function Home() {
 
   return (
     <div className="min-h-screen h-screen bg-[#0a0a0a] text-gray-100 flex flex-col font-sans overflow-hidden">
-            {/* Top Navbar */}
+      {plan !== 'free' && planExpiresAt && new Date(planExpiresAt.getTime() - 3 * 24 * 60 * 60 * 1000) < new Date() && (
+        <div className="bg-orange-500/10 text-orange-400 border-b border-orange-500/20 px-4 py-1.5 text-[12px] flex items-center justify-center gap-2 flex-shrink-0">
+          <AlertTriangle size={14} />
+          Your {plan.toUpperCase()} plan is ending soon. Renew to continue benefits.
+          <Link href="/#pricing" className="underline font-medium hover:text-orange-300 ml-2">Renew now</Link>
+        </div>
+      )}
+      {/* Top Navbar */}
       <header className="h-8 flex items-center justify-between pl-2 bg-[#181818] border-b border-[#2b2b2b] flex-shrink-0 select-none font-sans">
         {/* Left: Logo & Menu */}
         <div className="flex items-center h-full">

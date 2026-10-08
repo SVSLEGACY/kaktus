@@ -10,9 +10,10 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   plan: string;
+  planExpiresAt: Date | null;
 }
 
-const AuthContext = createContext<AuthContextType>({ user: null, loading: true, plan: 'free' });
+const AuthContext = createContext<AuthContextType>({ user: null, loading: true, plan: 'free', planExpiresAt: null });
 
 export const useAuth = () => useContext(AuthContext);
 
@@ -20,6 +21,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [plan, setPlan] = useState('free');
+  const [planExpiresAt, setPlanExpiresAt] = useState<Date | null>(null);
   const router = useRouter();
   const pathname = usePathname();
 
@@ -32,6 +34,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const docSnap = await getDoc(doc(db, 'users', currentUser.uid));
           const docData = docSnap.exists() ? docSnap.data() : null;
           let p = docData?.plan || 'free';
+          let expires: Date | null = null;
           
           if (docData?.planExpiresAt) {
             const expiresAt = docData.planExpiresAt.toDate ? docData.planExpiresAt.toDate() : new Date(docData.planExpiresAt);
@@ -41,10 +44,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               import('firebase/firestore').then(({ updateDoc }) => {
                 updateDoc(doc(db, 'users', currentUser.uid), { plan: 'free' }).catch(console.error);
               });
+            } else {
+              expires = expiresAt;
             }
           }
           
           setPlan(p);
+          setPlanExpiresAt(expires);
           localStorage.setItem('kaktus_user_plan', p);
           localStorage.setItem('kaktus_user_uid', currentUser.uid);
         } catch (e) {
@@ -52,6 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       } else {
         setPlan('free');
+        setPlanExpiresAt(null);
         localStorage.removeItem('kaktus_user_plan');
         localStorage.removeItem('kaktus_user_uid');
       }
@@ -68,7 +75,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [pathname, router]);
 
   return (
-    <AuthContext.Provider value={{ user, loading, plan }}>
+    <AuthContext.Provider value={{ user, loading, plan, planExpiresAt }}>
       {children}
     </AuthContext.Provider>
   );
