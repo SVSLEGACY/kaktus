@@ -70,10 +70,20 @@ export const approvePayment = async (txn: PaymentTransaction) => {
     currentProRuns = userSnap.data().proRuns;
   }
   
+  let expiresAt = new Date();
+  if (txn.planId === 'starter') {
+    expiresAt.setMinutes(expiresAt.getMinutes() + 5);
+  } else if (txn.planId === 'booster') {
+    expiresAt.setDate(expiresAt.getDate() + 14);
+  } else if (txn.planId === 'pro') {
+    expiresAt.setDate(expiresAt.getDate() + 30);
+  }
+
   await setDoc(userRef, {
     plan: txn.planId,
     proRuns: currentProRuns + proRuns,
-    planUpdatedAt: serverTimestamp()
+    planUpdatedAt: serverTimestamp(),
+    planExpiresAt: expiresAt
   }, { merge: true });
 };
 

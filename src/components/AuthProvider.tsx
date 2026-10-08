@@ -30,7 +30,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (currentUser) {
         try {
           const docSnap = await getDoc(doc(db, 'users', currentUser.uid));
-          const p = docSnap.exists() && docSnap.data().plan ? docSnap.data().plan : 'free';
+          const docData = docSnap.exists() ? docSnap.data() : null;
+          let p = docData?.plan || 'free';
+          
+          if (docData?.planExpiresAt) {
+            const expiresAt = docData.planExpiresAt.toDate ? docData.planExpiresAt.toDate() : new Date(docData.planExpiresAt);
+            if (new Date() > expiresAt) {
+              p = 'free';
+              // Update in Firestore to clear expired plan
+              import('firebase/firestore').then(({ updateDoc }) => {
+                updateDoc(doc(db, 'users', currentUser.uid), { plan: 'free' }).catch(console.error);
+              });
+            }
+          }
+          
           setPlan(p);
           localStorage.setItem('kaktus_user_plan', p);
           localStorage.setItem('kaktus_user_uid', currentUser.uid);
