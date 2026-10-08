@@ -139,6 +139,7 @@ interface ChatBoxProps {
   pendingPlanAction: PlanBuildAction | null;
   onPlanActionConsumed: () => void;
   modelSelectorNode?: React.ReactNode;
+  onQuotaReached?: () => void;
 }
 
 
@@ -675,7 +676,7 @@ function printResponseAsPdf(content: string, title: string) {
 }
 
 // --- Main Component ---
-export function ChatBox({ apiKeys, model, onExecuteCommand, onUpdateCircuit, onStepChange, currentStep, totalSteps, circuitData, allTabs, activeTabId, targetWorkspaceTabId, sessionId, sessionTitle, sessions, onNewChat, onSelectSession, onUpdateSessionTitle, onDeleteSession, onOpenImplementationPlan, pendingPlanAction, onPlanActionConsumed, modelSelectorNode }: ChatBoxProps) {
+export function ChatBox({ apiKeys, model, onExecuteCommand, onUpdateCircuit, onStepChange, currentStep, totalSteps, circuitData, allTabs, activeTabId, targetWorkspaceTabId, sessionId, sessionTitle, sessions, onNewChat, onSelectSession, onUpdateSessionTitle, onDeleteSession, onOpenImplementationPlan, pendingPlanAction, onPlanActionConsumed, modelSelectorNode, onQuotaReached }: ChatBoxProps) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatReady, setChatReady] = useState(false);

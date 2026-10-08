@@ -9,7 +9,7 @@ import { ChatBox, ImplementationPlanCard } from '@/components/ChatBox';
 import { ModelSelector } from '@/components/ModelSelector';
 import type { TerminalRef } from '@/components/Terminal';
 import type { TutorialData } from '@/components/CircuitCanvas';
-import { TerminalSquare, X, Layers, Cpu, Cable, Zap, CircuitBoard, Usb, Settings, Upload, Trash2, Circle, LogOut } from 'lucide-react';
+import { TerminalSquare, X, Layers, Cpu, Cable, Zap, CircuitBoard, Usb, Settings, Upload, Trash2, Circle, LogOut, ShieldAlert } from 'lucide-react';
 import { FlashPanel } from '@/components/FlashPanel';
 import { extractProjectPlanResponse } from '@/lib/agent/protocol';
 import type { PlanBuildAction, ProjectPlan, ResearchSource } from '@/lib/agent/protocol';
@@ -71,7 +71,8 @@ const CircuitCanvas = dynamic(() => import('@/components/CircuitCanvas').then((m
 
 export default function Home() {
   const router = useRouter();
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, plan } = useAuth();
+  const tokenLimit = plan === 'free' ? 100000 : 200000;
   const [apiKeys, setApiKeys] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
   
@@ -80,7 +81,40 @@ export default function Home() {
   const [sessionId, setSessionId] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSaved, setLastSaved] = useState<string>('');
+  const [totalTokens, setTotalTokens] = useState(0);
+  const [isQuotaModalDismissed, setIsQuotaModalDismissed] = useState(false);
   const syncTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    const updateTokens = () => {
+      try {
+        const usageRaw = localStorage.getItem('gemini_key_usage_stats');
+        if (usageRaw) {
+          const usage = JSON.parse(usageRaw);
+          let totalStoredTokens = 0;
+          for (const date in usage) {
+            for (const key in usage[date]) {
+              for (const model in usage[date][key]) {
+                totalStoredTokens += usage[date][key][model];
+              }
+            }
+          }
+          // Now usage reflects exact token count returned by Gemini API
+          setTotalTokens(totalStoredTokens);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    };
+    updateTokens();
+    const interval = setInterval(updateTokens, 5000);
+    window.addEventListener('geminiUsageUpdated', updateTokens);
+    
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('geminiUsageUpdated', updateTokens);
+    };
+  }, []);
 
   // Auto-save to Firebase with debounce (3 seconds after last change)
   const triggerAutoSave = useCallback(() => {
@@ -558,20 +592,41 @@ export default function Home() {
         <div className="flex items-center h-full pr-4 gap-3">
           {user && (
             <>
-              <div className="w-px h-3 bg-gray-700 mx-1"></div>
-              <div 
-                className="flex items-center gap-2 group cursor-pointer" 
-                onClick={() => { router.push('/'); setTimeout(() => signOut(auth), 100); }}
-                title="Click to Logout"
-              >
-                <div className="w-5 h-5 rounded-full bg-white flex items-center justify-center text-black text-[10px] font-bold shadow-sm">
+              {/* Token Usage Bar */}
+              <div className="flex items-center gap-3 mr-2 bg-[#1a1a1a] px-3 py-1.5 rounded-md border border-[#333]">
+                <div className="flex flex-col items-end w-28">
+                  <div className="flex justify-between w-full mb-1">
+                    <span className="text-[9px] text-gray-400 font-semibold uppercase tracking-wider">{plan === 'free' ? 'Free Trial' : 'Pro Plan'}</span>
+                    <span className="text-[9px] text-blue-400 font-medium">{(totalTokens / 1000).toFixed(1)}k / {tokenLimit / 1000}k</span>
+                  </div>
+                  <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-gradient-to-r from-blue-600 to-blue-400 rounded-full transition-all duration-500" 
+                      style={{ width: `${Math.min(100, (totalTokens / tokenLimit) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="w-px h-4 bg-gray-700 mx-1"></div>
+              
+              <div className="flex items-center gap-2 group relative">
+                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-[11px] font-bold shadow-sm">
                   {(user.displayName || user.email || "U")[0].toUpperCase()}
                 </div>
-                <span className="text-[10px] text-gray-400 group-hover:text-white transition-colors uppercase tracking-widest font-semibold hidden md:block">
-                  Logout
-                </span>
+                <div className="flex flex-col">
+                  <span className="text-[11px] text-gray-200 font-medium hidden md:block max-w-[120px] truncate">
+                    {user.email}
+                  </span>
+                  <span 
+                    onClick={() => { router.push('/'); setTimeout(() => signOut(auth), 100); }}
+                    className="text-[9px] text-gray-500 hover:text-red-400 transition-colors uppercase tracking-widest hidden md:block cursor-pointer font-semibold"
+                  >
+                    Logout
+                  </span>
+                </div>
               </div>
-              <div className="w-px h-3 bg-gray-700 mx-1"></div>
+              <div className="w-px h-4 bg-gray-700 mx-1"></div>
             </>
           )}
           <Link href="/admin" className="px-2 h-full flex items-center text-gray-400 hover:text-gray-200 hover:bg-[#333333] rounded transition-colors" title="Settings">
@@ -620,6 +675,7 @@ export default function Home() {
               onOpenImplementationPlan={handleOpenImplementationPlan}
               pendingPlanAction={pendingPlanAction}
               onPlanActionConsumed={handlePlanActionConsumed}
+              onQuotaReached={() => setIsQuotaModalDismissed(false)}
               modelSelectorNode={<ModelSelector apiKey={apiKeys[0] || ''} selectedModel={selectedModel} onModelChange={setSelectedModel} variant="minimal" />}
             />}
           </div>
@@ -785,6 +841,45 @@ export default function Home() {
               <div className="flex-1 min-h-0 overflow-hidden">
                  <Terminal ref={terminalRef} />
               </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Token Limit Modal */}
+        <AnimatePresence>
+          {totalTokens >= tokenLimit && !isQuotaModalDismissed && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm"
+            >
+              <motion.div 
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                className="relative bg-[#18181b] border border-red-900/50 rounded-2xl p-8 max-w-md w-full shadow-2xl flex flex-col items-center text-center"
+              >
+                <button
+                  onClick={() => setIsQuotaModalDismissed(true)}
+                  className="absolute top-4 right-4 text-gray-500 hover:text-gray-300 transition-colors"
+                >
+                  <X size={20} />
+                </button>
+                <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mb-6 mt-2">
+                  <ShieldAlert className="w-8 h-8 text-red-500" />
+                </div>
+                <h2 className="text-2xl font-bold text-gray-100 mb-3">Daily Quota Reached</h2>
+                <p className="text-gray-400 mb-8 leading-relaxed">
+                  You have exceeded your {tokenLimit / 1000}k tokens limit for today. Please upgrade your plan to continue chatting, building, and simulating.
+                </p>
+                <button
+                  onClick={() => router.push('/#pricing')}
+                  className="w-full py-3.5 px-4 bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white rounded-xl font-semibold transition-all shadow-lg hover:shadow-blue-500/25 flex items-center justify-center gap-2"
+                >
+                  Upgrade Plan to Continue
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                </button>
+              </motion.div>
             </motion.div>
           )}
         </AnimatePresence>

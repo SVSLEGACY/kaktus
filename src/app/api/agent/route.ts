@@ -20,6 +20,11 @@ interface GeminiResponse {
       webSearchQueries?: string[];
     };
   }>;
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    totalTokenCount?: number;
+  };
 }
 
 export async function POST(request: Request) {
@@ -71,7 +76,8 @@ export async function POST(request: Request) {
       : []).filter((source: { uri: string }, index: number, all: { uri: string }[]) => all.findIndex(item => item.uri === source.uri) === index).slice(0, 20)
     : [];
   const searchQueries = Array.isArray(grounding?.webSearchQueries) ? grounding.webSearchQueries.slice(0, 12) : [];
-  return Response.json({ text, sources, searchQueries, researched: body.research === true && sources.length > 0 });
+  const usage = result.usageMetadata?.totalTokenCount || 0;
+  return Response.json({ text, sources, searchQueries, researched: body.research === true && sources.length > 0, usage });
 }
 
 export async function GET() {

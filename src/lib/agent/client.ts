@@ -30,6 +30,34 @@ interface AgentRequest {
 }
 
 export async function requestAgent(request: AgentRequest): Promise<AgentResponse> {
+  // Check token limits before making the request
+  if (typeof window !== 'undefined') {
+    const usageRaw = localStorage.getItem('gemini_key_usage_stats');
+    if (usageRaw) {
+      try {
+        const usageObj = JSON.parse(usageRaw);
+        let currentTotal = 0;
+        for (const date in usageObj) {
+          for (const key in usageObj[date]) {
+            for (const model in usageObj[date][key]) {
+              currentTotal += usageObj[date][key][model];
+            }
+          }
+        }
+        const plan = localStorage.getItem('kaktus_user_plan') || 'free';
+        const limit = plan === 'free' ? 100000 : 200000;
+        
+        if (currentTotal >= limit) {
+          throw new Error(`Daily Quota Reached. You have exceeded your ${limit / 1000}k tokens limit. Please upgrade your plan to continue.`);
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.includes('Quota Reached')) {
+          throw e;
+        }
+      }
+    }
+  }
+
   if (!request.apiKeys || request.apiKeys.length === 0) {
     // Fallback to server-side default API key
     const payload = { ...request, apiKey: 'default_server_key' };
@@ -97,8 +125,12 @@ export async function requestAgent(request: AgentRequest): Promise<AgentResponse
           
           const baseModel = request.model.replace('models/', '');
           if (!usage[today][key][baseModel]) usage[today][key][baseModel] = 0;
-          usage[today][key][baseModel] += 1;
+          
+          const tokensUsed = typeof data.usage === 'number' ? data.usage : 0;
+          usage[today][key][baseModel] += tokensUsed;
+          
           localStorage.setItem('gemini_key_usage_stats', JSON.stringify(usage));
+          window.dispatchEvent(new Event('geminiUsageUpdated'));
         }
       } catch(e) {
         console.error("Failed to track usage", e);
