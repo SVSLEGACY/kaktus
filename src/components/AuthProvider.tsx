@@ -33,12 +33,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const p = docSnap.exists() && docSnap.data().plan ? docSnap.data().plan : 'free';
           setPlan(p);
           localStorage.setItem('kaktus_user_plan', p);
+          localStorage.setItem('kaktus_user_uid', currentUser.uid);
         } catch (e) {
           console.error("Failed to fetch plan", e);
         }
       } else {
         setPlan('free');
         localStorage.removeItem('kaktus_user_plan');
+        localStorage.removeItem('kaktus_user_uid');
       }
       
       setLoading(false);

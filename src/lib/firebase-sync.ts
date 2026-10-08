@@ -7,7 +7,7 @@ export async function syncToFirebase(uid: string, registry: any, workspaces: any
   try { 
     await setDoc(doc(db, 'users', uid, 'data', 'registry'), { payload: JSON.stringify(registry) }); 
     
-    const usageStr = localStorage.getItem('gemini_key_usage_stats');
+    const usageStr = localStorage.getItem(`gemini_key_usage_stats_${uid}`);
     if (usageStr) {
       await setDoc(doc(db, 'users', uid, 'data', 'usage'), { payload: usageStr });
     }
@@ -34,7 +34,7 @@ export async function loadFromFirebase(uid: string) {
     
     const usageSnap = await getDoc(doc(db, 'users', uid, 'data', 'usage'));
     if (usageSnap.exists() && usageSnap.data().payload) {
-      localStorage.setItem('gemini_key_usage_stats', usageSnap.data().payload);
+      localStorage.setItem(`gemini_key_usage_stats_${uid}`, usageSnap.data().payload);
     }
 
     const wsSnap = await getDocs(collection(db, 'users', uid, 'workspaces')); 

@@ -88,7 +88,9 @@ export default function Home() {
   useEffect(() => {
     const updateTokens = () => {
       try {
-        const usageRaw = localStorage.getItem('gemini_key_usage_stats');
+        const uid = localStorage.getItem('kaktus_user_uid');
+        if (!uid) return;
+        const usageRaw = localStorage.getItem(`gemini_key_usage_stats_${uid}`);
         if (usageRaw) {
           const usage = JSON.parse(usageRaw);
           let totalStoredTokens = 0;
@@ -101,6 +103,8 @@ export default function Home() {
           }
           // Now usage reflects exact token count returned by Gemini API
           setTotalTokens(totalStoredTokens);
+        } else {
+          setTotalTokens(0);
         }
       } catch (e) {
         console.error(e);

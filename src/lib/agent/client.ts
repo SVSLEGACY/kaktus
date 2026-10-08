@@ -32,7 +32,9 @@ interface AgentRequest {
 export async function requestAgent(request: AgentRequest): Promise<AgentResponse> {
   // Check token limits before making the request
   if (typeof window !== 'undefined') {
-    const usageRaw = localStorage.getItem('gemini_key_usage_stats');
+    const uid = localStorage.getItem('kaktus_user_uid');
+    if (uid) {
+      const usageRaw = localStorage.getItem(`gemini_key_usage_stats_${uid}`);
     if (usageRaw) {
       try {
         const usageObj = JSON.parse(usageRaw);
@@ -55,6 +57,7 @@ export async function requestAgent(request: AgentRequest): Promise<AgentResponse
           throw e;
         }
       }
+    }
     }
   }
 
@@ -117,20 +120,23 @@ export async function requestAgent(request: AgentRequest): Promise<AgentResponse
       // Track usage
       try {
         if (typeof window !== 'undefined') {
-          const today = new Date().toISOString().split('T')[0];
-          const usageRaw = localStorage.getItem('gemini_key_usage_stats') || '{}';
-          const usage = JSON.parse(usageRaw);
-          if (!usage[today]) usage[today] = {};
-          if (!usage[today][key]) usage[today][key] = {};
-          
-          const baseModel = request.model.replace('models/', '');
-          if (!usage[today][key][baseModel]) usage[today][key][baseModel] = 0;
-          
-          const tokensUsed = typeof data.usage === 'number' ? data.usage : 0;
-          usage[today][key][baseModel] += tokensUsed;
-          
-          localStorage.setItem('gemini_key_usage_stats', JSON.stringify(usage));
-          window.dispatchEvent(new Event('geminiUsageUpdated'));
+          const uid = localStorage.getItem('kaktus_user_uid');
+          if (uid) {
+            const today = new Date().toISOString().split('T')[0];
+            const usageRaw = localStorage.getItem(`gemini_key_usage_stats_${uid}`) || '{}';
+            const usage = JSON.parse(usageRaw);
+            if (!usage[today]) usage[today] = {};
+            if (!usage[today][key]) usage[today][key] = {};
+            
+            const baseModel = request.model.replace('models/', '');
+            if (!usage[today][key][baseModel]) usage[today][key][baseModel] = 0;
+            
+            const tokensUsed = typeof data.usage === 'number' ? data.usage : 0;
+            usage[today][key][baseModel] += tokensUsed;
+            
+            localStorage.setItem(`gemini_key_usage_stats_${uid}`, JSON.stringify(usage));
+            window.dispatchEvent(new Event('geminiUsageUpdated'));
+          }
         }
       } catch(e) {
         console.error("Failed to track usage", e);
