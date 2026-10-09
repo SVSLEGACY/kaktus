@@ -1,36 +1,39 @@
 import type { Metadata } from "next";
-import { Space_Grotesk, Fira_Code } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/components/AuthProvider";
 
-const customFont = Space_Grotesk({
-  variable: "--font-custom",
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
-});
-
-const customMono = Fira_Code({
-  variable: "--font-custom-mono",
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
-});
-
 export const metadata: Metadata = {
-  title: "Kaktus",
+  title: "Kaktus — AI hardware studio",
   description: "AI-assisted circuit, PCB, firmware, and hardware validation workspace",
+  icons: {
+    icon: "/favicon.ico",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html
-      lang="en"
-      className={`${customFont.variable} ${customMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col font-sans relative">
+    <html lang="en" className="h-full antialiased" data-scroll-behavior="smooth">
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900;1000&family=Fira+Code:wght@300..700&display=swap"
+        />
+      </head>
+      <body className="kaktus-theme min-h-full flex flex-col font-sans relative">
+        <img
+          src="/assets/stitched-fabric.jpg"
+          alt=""
+          aria-hidden="true"
+          width={1536}
+          height={1024}
+          className="fabric-backdrop"
+        />
         <AuthProvider>
           {children}
         </AuthProvider>
-        <div className="fixed bottom-3 left-3 z-[9999] felt-patch text-[10px] px-3 py-1.5 pointer-events-none select-none tracking-wider uppercase font-bold text-[#2c2420]">
+        <div className="prototype-label fixed bottom-2 left-2 z-[9999] font-mono text-[10px] px-2 py-1 pointer-events-none select-none uppercase">
           Prototype Version
         </div>
       </body>

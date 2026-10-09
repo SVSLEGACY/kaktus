@@ -16,6 +16,8 @@ import { signOut } from 'firebase/auth';
 
 import { PricingSection } from '@/components/PricingSection';
 import { ScrollStitch } from '@/components/ScrollStitch';
+import { useAuth } from '@/components/AuthProvider';
+import embroideredBrain from '@/assets/embroidered-brain.png';
 
 // 3D Particle Wave
 function ParticleWave() {
@@ -129,8 +131,6 @@ function FadeIn({ children, delay = 0, className = "" }: { children: React.React
   );
 }
 
-import { useAuth } from '@/components/AuthProvider';
-
 export default function LandingPage() {
   const { user } = useAuth();
   const icons = [
@@ -138,8 +138,12 @@ export default function LandingPage() {
     Component, Zap, Database, Usb, MonitorDot, Rocket
   ];
 
+  const brainImgSrc = typeof embroideredBrain === 'string' 
+    ? embroideredBrain 
+    : (embroideredBrain as any)?.src || '/assets/embroidered-brain.png';
+
   return (
-    <div className="w-full min-h-screen bg-transparent text-[#2c2420] font-sans selection:bg-green-500/20 overflow-x-hidden relative z-10">
+    <div className="kaktus-home w-full min-h-screen bg-background text-foreground font-sans selection:bg-primary/20 overflow-x-hidden">
       <ScrollStitch />
       
       {/* Navbar: Fully Transparent, No Border */}
@@ -166,7 +170,7 @@ export default function LandingPage() {
           {user && (
             <button
               onClick={() => signOut(auth)}
-              className="felt-patch flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-[#2c2420] hover:text-red-600 transition-all cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-gray-600 hover:text-red-600 bg-gray-100/90 hover:bg-red-50 border border-gray-200 hover:border-red-200 rounded-full transition-all shadow-xs backdrop-blur-sm cursor-pointer"
               title={`Logged in as ${user.email || 'User'} - Click to Logout`}
             >
               <LogOut size={13} />
@@ -175,18 +179,14 @@ export default function LandingPage() {
           )}
         </div>
         
-        <nav className="hidden lg:flex items-center gap-6 text-sm font-medium text-[#5a4f45]">
-          <Link href="/app-info" className="hover:text-[#2c2420] transition-colors">App Info</Link>
-          <Link href="/how-to-use" className="hover:text-[#2c2420] transition-colors">How to Use</Link>
-          <a href="#pricing" className="hover:text-[#2c2420] transition-colors">Pricing</a>
-          <Link href="/login" className="font-semibold text-green-600 hover:text-green-700">Login</Link>
+        <nav className="hidden lg:flex items-center gap-10 text-sm font-medium text-gray-500">
+          <Link href="/app-info" className="hover:text-black transition-colors">App Info</Link>
+          <Link href="/how-to-use" className="hover:text-black transition-colors">How to Use</Link>
+          <a href="#pricing" className="hover:text-black transition-colors">Pricing</a>
           {!user ? (
-            <div className="flex items-center gap-3">
-              <Link href="/login" className="felt-patch px-4 py-1.5 text-[#2c2420] font-semibold hover:opacity-80 transition-opacity">Log in</Link>
-              <Link href="/login" className="felt-patch-dark px-4 py-1.5 font-semibold hover:opacity-90 transition-opacity text-sm">Sign In</Link>
-            </div>
+            <Link href="/login" className="font-semibold text-green-600 hover:text-green-700">Login</Link>
           ) : (
-            <Link href="/ide" className="felt-patch px-4 py-1.5 font-semibold text-green-700 hover:opacity-80 transition-opacity">Workspace</Link>
+            <Link href="/ide" className="font-semibold text-green-600 hover:text-green-700">Workspace</Link>
           )}
         </nav>
         
@@ -194,10 +194,10 @@ export default function LandingPage() {
       </header>
 
       {/* Hero Section */}
-      <main className="relative w-full h-screen flex flex-col justify-center items-center text-center">
+      <main className="fabric-hero relative w-full flex flex-col justify-center items-center text-center">
         
         {/* 3D Background */}
-        <div className="absolute inset-0 z-0 pointer-events-none opacity-60">
+        <div className="thread-particles absolute inset-0 z-0 pointer-events-none opacity-60">
           <Canvas camera={{ position: [0, 0, 10], fov: 45 }}>
             <ambientLight intensity={1} />
             <ParticleWave />
@@ -222,14 +222,14 @@ export default function LandingPage() {
             as="h1"
             delaySpeed={0.25}
             duration={0.6}
-            className="text-5xl md:text-7xl lg:text-[5rem] leading-[1.1] tracking-tight mb-10 flex flex-wrap justify-center stitched-text"
+            className="hero-title leading-[1.12] font-black text-foreground mb-10 flex flex-wrap justify-center"
           />
         </div>
       </main>
 
       {/* Intro Arc Section */}
-      <section className="w-full min-h-[60vh] bg-transparent flex flex-col items-center justify-center py-10 px-6 relative z-10">
-        <div className="flex justify-center items-end h-40 mb-16 gap-3 md:gap-5">
+      <section className="intro-section w-full min-h-[60vh] flex flex-col items-center justify-center py-10 px-6 relative z-10">
+        <div className="patch-arc flex justify-center items-end h-40 mb-16 gap-3 md:gap-5">
           {icons.map((Icon, i) => {
             const center = (icons.length - 1) / 2;
             const dist = Math.abs(i - center);
@@ -242,7 +242,7 @@ export default function LandingPage() {
                 whileInView={{ opacity: 1, y: translateY }}
                 viewport={{ once: true, margin: "-10%" }}
                 transition={{ duration: 0.5, delay: i * 0.05 }}
-                className={`w-10 h-10 md:w-14 md:h-14 rounded-full icon-felt flex items-center justify-center ${['icon-felt-red','icon-felt-orange','icon-felt-green','icon-felt-cyan','icon-felt-blue','icon-felt-purple','icon-felt-amber','icon-felt-teal','icon-felt-indigo','icon-felt-pink','icon-felt-rose','icon-felt-yellow'][i % 12]}`}
+                className="icon-patch w-10 h-10 md:w-14 md:h-14 rounded-full flex items-center justify-center"
               >
                 <Icon size={20} strokeWidth={1.5} />
               </motion.div>
@@ -254,41 +254,42 @@ export default function LandingPage() {
           <TypingText 
             text="Kaktus is our intelligent hardware engineering platform, allowing anyone to design, wire, and build in the AI-first era." 
             delaySpeed={0.08}
-            className="text-4xl md:text-5xl leading-tight flex flex-wrap gap-x-3 gap-y-2 justify-center max-w-4xl mx-auto stitched-text"
+            className="text-4xl md:text-5xl font-medium text-[#111] leading-tight flex flex-wrap gap-x-3 gap-y-2 justify-center max-w-4xl mx-auto"
           />
         </div>
       </section>
 
       {/* New High-Level Info Sections for Main Page */}
-      <section className="w-full py-32 px-6 md:px-12 bg-transparent">
-        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-20 items-center">
+      <section className="intelligence-section relative w-full py-32 px-6 md:px-12">
+        <div className="relative z-10 max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-10 md:gap-16 items-center">
           <FadeIn>
-            <div className="w-16 h-16 rounded-full felt-circle bg-orange-50 flex items-center justify-center mb-8">
-              <Brain className="w-8 h-8 text-orange-500" />
+            <div className="intelligence-badge w-14 h-14 flex items-center justify-center mb-8">
+              <Brain className="w-7 h-7 text-accent" />
             </div>
-            <h2 className="text-4xl md:text-6xl tracking-tight mb-6 stitched-text">Omniscient Intelligence.</h2>
-            <p className="text-xl text-[#6b5e52] leading-relaxed mb-8">
+            <h2 className="text-4xl md:text-6xl font-bold mb-6">Omniscient <span className="text-primary">Intelligence.</span></h2>
+            <p className="text-xl text-muted-foreground leading-relaxed mb-8">
               We replaced thousands of datasheets and hours of manual routing with a single, omniscient AGI core that understands physics.
             </p>
-            <Link href="/app-info" className="inline-flex items-center gap-2 text-orange-600 font-medium hover:text-orange-700">
+            <Link href="/app-info" className="intelligence-link inline-flex items-center gap-2 text-accent font-bold hover:text-primary transition-colors">
               Read how the engine works <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
             </Link>
           </FadeIn>
-          <FadeIn delay={0.2} className="felt-card p-12 h-96 flex items-center justify-center">
-            {/* Minimal graphic representing intelligence */}
-            <div className="relative w-40 h-40">
-              <div className="absolute inset-0 border-2 border-orange-200 rounded-full animate-ping opacity-20"></div>
-              <div className="absolute inset-4 border-2 border-orange-300 rounded-full animate-spin" style={{ animationDuration: '4s' }}></div>
-              <div className="absolute inset-8 border-2 border-orange-400 rounded-full animate-spin" style={{ animationDuration: '3s', animationDirection: 'reverse' }}></div>
-              <div className="absolute inset-0 flex items-center justify-center"><Brain className="w-8 h-8 text-orange-500" /></div>
-            </div>
+          <FadeIn delay={0.2} className="intelligence-embroidery flex items-center justify-center">
+            <img 
+              src={brainImgSrc} 
+              alt="Brain embroidered in cactus green and orange yarn" 
+              loading="lazy" 
+              width={1024} 
+              height={1024} 
+              className="w-full max-w-md h-auto" 
+            />
           </FadeIn>
         </div>
       </section>
 
-      <section className="w-full py-32 px-6 md:px-12 bg-transparent">
+      <section className="w-full py-32 px-6 md:px-12 bg-gray-50/50">
         <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-20 items-center">
-          <FadeIn className="felt-card p-12 h-96 flex items-center justify-center order-2 md:order-1">
+          <FadeIn className="fabric-panel simulation-panel p-12 h-96 flex items-center justify-center order-2 md:order-1">
              {/* Minimal graphic representing simulation */}
              <div className="flex flex-col gap-4 w-full max-w-xs">
                <div className="h-4 w-full bg-gray-100 rounded-full overflow-hidden">
@@ -303,11 +304,11 @@ export default function LandingPage() {
              </div>
           </FadeIn>
           <FadeIn delay={0.2} className="order-1 md:order-2">
-            <div className="w-16 h-16 rounded-full felt-circle bg-green-50 flex items-center justify-center mb-8">
+            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-8">
               <Code2 className="w-8 h-8 text-green-500" />
             </div>
-            <h2 className="text-4xl md:text-6xl tracking-tight mb-6 stitched-text">Simulate Reality.</h2>
-            <p className="text-xl text-[#6b5e52] leading-relaxed mb-8">
+            <h2 className="text-4xl md:text-6xl font-bold tracking-tight mb-6">Simulate Reality.</h2>
+            <p className="text-xl text-gray-500 leading-relaxed mb-8">
               Test your firmware directly against virtual hardware. The system compiles C++ instantly and simulates serial logic in real-time.
             </p>
             <Link href="/how-to-use" className="inline-flex items-center gap-2 text-green-600 font-medium hover:text-green-700">
@@ -316,23 +317,24 @@ export default function LandingPage() {
           </FadeIn>
         </div>
       </section>
+      
       <PricingSection />
 
       {/* Huge CTA Section at the absolute bottom */}
-      <section className="w-full py-40 px-6 flex flex-col items-center justify-center text-center bg-transparent">
+      <section className="w-full py-40 px-6 flex flex-col items-center justify-center text-center bg-gray-50/50 border-t border-gray-100">
         <FadeIn className="flex flex-col items-center max-w-3xl">
-          <div className="w-20 h-20 rounded-full felt-circle bg-green-50 flex items-center justify-center mb-8">
+          <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-8">
             <Rocket className="text-green-600 w-10 h-10" />
           </div>
-          <h2 className="text-5xl md:text-7xl tracking-tight mb-8 stitched-text">
+          <h2 className="text-5xl md:text-7xl font-bold tracking-tight mb-8">
             Ready to build?
           </h2>
-          <p className="text-xl text-[#6b5e52] mb-12">
+          <p className="text-xl text-gray-500 mb-12">
             Join the physical-first era. Enter the workspace and let Kaktus turn your ideas into reality.
           </p>
           <Link 
             href="/ide"
-            className="group relative px-10 py-5 felt-patch-dark text-xl !rounded-full hover:opacity-90 transition-all hover:scale-105 shadow-2xl flex items-center gap-3 overflow-hidden"
+            className="stitched-cta group relative px-10 py-5 bg-foreground text-background text-xl font-bold rounded-full transition-all hover:scale-105 flex items-center gap-3 overflow-hidden"
           >
             <span className="relative z-10 flex items-center gap-2">
               Enter Workspace 
