@@ -30,7 +30,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <AuthProvider>
           {children}
         </AuthProvider>
-        <div className="fixed bottom-2 left-2 z-[9999] bg-black/40 backdrop-blur-sm text-white/50 font-mono text-[10px] px-2 py-1 rounded border border-white/10 pointer-events-none select-none tracking-wider uppercase">
+        <div className="fixed bottom-3 left-3 z-[9999] felt-patch text-[10px] px-3 py-1.5 pointer-events-none select-none tracking-wider uppercase font-bold text-[#2c2420]">
           Prototype Version
         </div>
       </body>

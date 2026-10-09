@@ -84,18 +84,18 @@ export function PricingSection() {
   };
 
   return (
-    <section id="pricing" className="w-full py-32 px-6 md:px-12 bg-white border-t border-gray-100">
+    <section id="pricing" className="w-full py-32 px-6 md:px-12 bg-transparent">
       <div className="max-w-7xl mx-auto flex flex-col items-center">
         <FadeIn className="text-center mb-20 max-w-3xl">
-          <h2 className="text-4xl md:text-6xl font-bold tracking-tight mb-6">Simple, transparent pricing.</h2>
-          <p className="text-xl text-gray-500 leading-relaxed">
+          <h2 className="text-4xl md:text-6xl tracking-tight mb-6 stitched-text">Simple, transparent pricing.</h2>
+          <p className="text-xl text-[#6b5e52] leading-relaxed">
             Start building for free. Upgrade for advanced reasoning and complex projects using our Pro models.
           </p>
         </FadeIn>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8 w-full max-w-6xl">
           {/* Free Plan */}
-          <FadeIn delay={0.1} className="flex flex-col p-8 bg-gray-50 rounded-3xl border border-gray-100 shadow-sm relative">
+          <FadeIn delay={0.1} className="flex flex-col p-8 felt-card relative">
             <h3 className="text-2xl font-bold mb-2">Free</h3>
             <p className="text-gray-500 mb-6">Perfect for learning and simple circuits.</p>
             <div className="text-5xl font-black mb-8">₹0<span className="text-lg text-gray-400 font-normal">/week</span></div>
@@ -104,14 +104,14 @@ export function PricingSection() {
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">Standard AI Models</span></li>
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">Circuit Canvas</span></li>
             </ul>
-            <button onClick={() => handlePlanClick('free', 'Free', '0')} className="w-full py-4 text-center rounded-xl bg-gray-200 text-gray-800 font-bold hover:bg-gray-300 transition-colors">
+            <button onClick={() => handlePlanClick('free', 'Free', '0')} className="w-full py-4 text-center felt-btn-light">
               Get Started
             </button>
           </FadeIn>
 
           {/* 1 Week Plan */}
-          <FadeIn delay={0.2} className="flex flex-col p-8 bg-white rounded-3xl border-2 border-green-500 shadow-xl relative scale-105 z-10">
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-green-500 text-white px-4 py-1 rounded-full text-sm font-bold tracking-wide">TESTING</div>
+          <FadeIn delay={0.2} className="flex flex-col p-8 felt-card-highlight relative scale-105 z-10">
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 felt-badge">TESTING</div>
             <h3 className="text-2xl font-bold mb-2">Starter</h3>
             <p className="text-gray-500 mb-6">Try the full power for a week.</p>
             <div className="text-5xl font-black mb-8">₹29<span className="text-lg text-gray-400 font-normal">/week</span></div>
@@ -120,13 +120,13 @@ export function PricingSection() {
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-bold text-black">10 Pro Runs</span></li>
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">Complex Reasoning</span></li>
             </ul>
-            <button onClick={() => handlePlanClick('starter', 'Starter', '29')} className="w-full py-4 text-center rounded-xl bg-green-500 text-white font-bold hover:bg-green-600 transition-colors shadow-md">
+            <button onClick={() => handlePlanClick('starter', 'Starter', '29')} className="w-full py-4 text-center felt-btn-green">
               Start Trial
             </button>
           </FadeIn>
 
           {/* 2 Week Plan */}
-          <FadeIn delay={0.3} className="flex flex-col p-8 bg-gray-50 rounded-3xl border border-gray-100 shadow-sm relative">
+          <FadeIn delay={0.3} className="flex flex-col p-8 felt-card relative">
             <h3 className="text-2xl font-bold mb-2">Booster</h3>
             <p className="text-gray-500 mb-6">For your mid-term projects.</p>
             <div className="text-5xl font-black mb-8">₹59<span className="text-lg text-gray-400 font-normal">/2 wks</span></div>
@@ -135,13 +135,13 @@ export function PricingSection() {
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-bold text-black">20 Pro Runs</span></li>
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">Zero-bug Generation</span></li>
             </ul>
-            <button onClick={() => handlePlanClick('booster', 'Booster', '59')} className="w-full py-4 text-center rounded-xl bg-gray-900 text-white font-bold hover:bg-black transition-colors">
+            <button onClick={() => handlePlanClick('booster', 'Booster', '59')} className="w-full py-4 text-center felt-btn-dark">
               Upgrade
             </button>
           </FadeIn>
 
           {/* 1 Month Plan */}
-          <FadeIn delay={0.4} className="flex flex-col p-8 bg-gray-50 rounded-3xl border border-gray-100 shadow-sm relative">
+          <FadeIn delay={0.4} className="flex flex-col p-8 felt-card relative">
             <h3 className="text-2xl font-bold mb-2">Pro</h3>
             <p className="text-gray-500 mb-6">For serious builders and engineers.</p>
             <div className="text-5xl font-black mb-8">₹159<span className="text-lg text-gray-400 font-normal">/mo</span></div>
@@ -150,7 +150,7 @@ export function PricingSection() {
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-bold text-black">50 Pro Runs</span></li>
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">Priority Processing</span></li>
             </ul>
-            <button onClick={() => handlePlanClick('pro', 'Pro', '159')} className="w-full py-4 text-center rounded-xl bg-gray-900 text-white font-bold hover:bg-black transition-colors">
+            <button onClick={() => handlePlanClick('pro', 'Pro', '159')} className="w-full py-4 text-center felt-btn-dark">
               Upgrade
             </button>
           </FadeIn>
@@ -168,7 +168,7 @@ export function PricingSection() {
             />
             <motion.div 
               initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
-              className="relative w-full max-w-md bg-white rounded-3xl p-6 md:p-8 shadow-2xl flex flex-col overflow-hidden"
+              className="relative w-full max-w-md felt-patch p-6 md:p-8 shadow-2xl flex flex-col overflow-hidden"
             >
               <button onClick={() => setSelectedPlan(null)} className="absolute top-4 right-4 text-gray-400 hover:text-black">
                 <X size={24} />

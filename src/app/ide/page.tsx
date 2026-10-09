@@ -527,7 +527,7 @@ export default function Home() {
   });
 
   return (
-    <div className="min-h-screen h-screen bg-[#0a0a0a] text-gray-100 flex flex-col font-sans overflow-hidden">
+    <div className="min-h-screen h-screen bg-[#0a0a0a] text-gray-100 flex flex-col font-sans overflow-hidden dark-ui">
       {plan !== 'free' && planExpiresAt && new Date(planExpiresAt.getTime() - 3 * 24 * 60 * 60 * 1000) < new Date() && (
         <div className="bg-orange-500/10 text-orange-400 border-b border-orange-500/20 px-4 py-1.5 text-[12px] flex items-center justify-center gap-2 flex-shrink-0">
           <AlertTriangle size={14} />
