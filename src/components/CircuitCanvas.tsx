@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, useDragControls } from 'framer-motion';
 import { Move, CheckCircle2, ChevronLeft, ChevronRight, ChevronUp, Play, ZoomIn, ZoomOut, Maximize, Send, Loader2, MessageCircle, X, SkipBack, Search, Zap } from 'lucide-react';
 import { requestAgent } from '@/lib/agent/client';
 // system-prompt not used here; canvas chat uses contextPrompt directly
@@ -57,6 +57,40 @@ interface CircuitCanvasProps {
 }
 
 
+const getWireStats = (color: string, pin1: string, pin2: string) => {
+  const isPower = color === '#ef4444' || pin1.includes('5V') || pin1.includes('3.3V') || pin1.includes('VIN');
+  const isGnd = color === '#000000' || pin1.includes('GND') || pin2.includes('GND');
+  const isSDA = pin1.includes('SDA') || pin2.includes('SDA');
+  const isSCL = pin1.includes('SCL') || pin2.includes('SCL');
+  const isPWM = color === '#f97316' || pin1.includes('~') || pin2.includes('~') || pin1.includes('PWM');
+  
+  if (isGnd) return { 'Voltage': '0V (Ref)', 'Current': 'Return Path', 'Type': 'Ground' };
+  if (isPower) {
+    const v = pin1.includes('3.3V') ? '3.3V' : (pin1.includes('9V') ? '9.0V' : '5.0V');
+    return { 'Voltage': v, 'Max Current': '~500mA', 'Type': 'Power Supply' };
+  }
+  if (isSDA) return { 'Logic Level': '3.3V / 5V', 'Protocol': 'I2C Data', 'Frequency': '100-400 kHz' };
+  if (isSCL) return { 'Logic Level': '3.3V / 5V', 'Protocol': 'I2C Clock', 'Frequency': '100-400 kHz' };
+  if (isPWM) return { 'Voltage': '0-5V (Pulsed)', 'Frequency': '~490 Hz', 'Type': 'PWM Signal' };
+  
+  return { 'Voltage': '0-5V (Logic)', 'Max Current': '< 40mA', 'Type': 'Digital/Analog Signal' };
+};
+
+const getComponentStats = (type: string) => {
+  const t = (type || '').toLowerCase();
+  if (t.includes('uno') || t.includes('nano')) return { 'Operating Voltage': '5V', 'Input Voltage': '7-12V', 'Clock Speed': '16 MHz', 'Logic Level': '5V' };
+  if (t.includes('esp32')) return { 'Operating Voltage': '3.3V', 'Clock Speed': '160-240 MHz', 'Wireless': 'Wi-Fi + BLE' };
+  if (t.includes('motor_driver') || t.includes('l298n')) return { 'Logic Voltage': '5V', 'Motor Voltage': '5-35V', 'Max Current': '2A per channel' };
+  if (t.includes('servo')) return { 'Operating Voltage': '4.8-6.0V', 'Control': 'PWM (50Hz)' };
+  if (t.includes('ultrasonic') || t.includes('hc-sr04')) return { 'Operating Voltage': '5V', 'Current': '15mA', 'Frequency': '40 kHz', 'Range': '2-400cm' };
+  if (t.includes('dht')) return { 'Operating Voltage': '3.3-5V', 'Current': '2.5mA max', 'Signal': 'Digital (1-wire)' };
+  if (t.includes('led')) return { 'Forward Voltage': '1.8-3.3V', 'Rec. Current': '20mA' };
+  if (t.includes('resistor')) return { 'Power Rating': '1/4 Watt', 'Tolerance': '±5%' };
+  if (t.includes('battery')) return { 'Voltage': t.includes('9v') ? '9V' : '3.7V', 'Type': 'Power Source' };
+  if (t.includes('oled') || t.includes('lcd')) return { 'Operating Voltage': '3.3-5V', 'Interface': 'I2C / SPI', 'Current': '~20mA' };
+  return { 'Status': 'Passive / Generic', 'Voltage': 'Circuit Dependent' };
+};
+
 function highlightCode(code: string) {
   return code
     .replace(/(\/\/[^\n]*)/g, '<span style="color:#6A9955">$1</span>')
@@ -106,7 +140,9 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
   const [wokwiLoaded, setWokwiLoaded] = useState(false);
   const [expandedPanel, setExpandedPanel] = useState(false);
   const [dockPosition, setDockPosition] = useState<'bottom-right' | 'top-left'>('bottom-right');
+  const dragControls = useDragControls();
   const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
+  const [selectedWireId, setSelectedWireId] = useState<string | null>(null);
   const [canvasChatOpen, setCanvasChatOpen] = useState(false);
   const [canvasChatInput, setCanvasChatInput] = useState('');
   const [canvasChatMessages, setCanvasChatMessages] = useState<{role: string, text: string}[]>([]);
@@ -634,7 +670,7 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
 
-        onClick={() => setSelectedComponentId(null)}
+        onClick={() => { setSelectedComponentId(null); setSelectedWireId(null); }}
         style={{
           backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.15) 1px, transparent 1px)',
           backgroundSize: `${20 * transform.scale}px ${20 * transform.scale}px`,
@@ -669,8 +705,8 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
             
             <AnimatePresence>
               {wirePaths.map(wire => {
-                const isSelected = selectedComponentId === wire.fromComp || selectedComponentId === wire.toComp;
-                const isDimmed = selectedComponentId !== null && !isSelected;
+                const isSelected = selectedComponentId === wire.fromComp || selectedComponentId === wire.toComp || selectedWireId === wire.id;
+                const isDimmed = (selectedComponentId !== null || selectedWireId !== null) && !isSelected;
                 return (
               <motion.g 
                 key={wire.id} 
@@ -679,6 +715,15 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                 exit={{ opacity: 0 }}
                 style={{ transition: 'opacity 0.2s' }}
               >
+                {/* Clickable invisible hit area */}
+                <path
+                  d={wire.path}
+                  stroke="transparent"
+                  strokeWidth={20}
+                  fill="none"
+                  className="pointer-events-auto cursor-pointer"
+                  onClick={(e) => { e.stopPropagation(); setSelectedWireId(wire.id); setSelectedComponentId(null); }}
+                />
                 {/* Wire trace background */}
                 <path
                   d={wire.path}
@@ -1110,12 +1155,16 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
         <motion.div 
           initial={{ y: 50, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
+          drag
+          dragControls={dragControls}
+          dragListener={false}
+          dragMomentum={false}
           className={`absolute ${dockPosition === 'bottom-right' ? 'bottom-10 right-6 items-end' : 'top-4 left-4 items-start'} z-30 flex flex-col gap-2 max-h-[calc(100vh-32px)] pointer-events-none`}
         >
           {/* We wrap children in a pointer-events-auto div to allow interaction while keeping the wrapper strictly for layout */}
           {/* Expanded step detail panel (toggle) */}
           <AnimatePresence>
-            {selectedComponentId && (
+            {(selectedComponentId || selectedWireId) && (
               <motion.div
                 initial={{ opacity: 0, y: 10, x: 20 }}
                 animate={{ opacity: 1, y: 0, x: 0 }}
@@ -1124,33 +1173,93 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
               >
                 <div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-800">
                   <h3 className="text-xs font-bold text-blue-400 flex items-center gap-1.5">
-                    <Search size={14} /> Inspect: {selectedComponentId}
+                    <Search size={14} /> Inspect: {selectedWireId ? 'Wire Connection' : selectedComponentId}
                   </h3>
-                  <button onClick={() => setSelectedComponentId(null)} className="text-gray-500 hover:text-white">
+                  <button onClick={() => { setSelectedComponentId(null); setSelectedWireId(null); }} className="text-gray-500 hover:text-white">
                     <X size={14} />
                   </button>
                 </div>
                 
                 <div className="max-h-[200px] overflow-y-auto space-y-1.5 pr-1">
-                  {wirePaths.filter(w => w.fromComp === selectedComponentId || w.toComp === selectedComponentId).length === 0 ? (
-                    <div className="text-[10px] text-gray-500 italic py-2 text-center">No wires connected in this step</div>
-                  ) : (
-                    wirePaths.filter(w => w.fromComp === selectedComponentId || w.toComp === selectedComponentId).map(w => {
-                      const isSource = w.fromComp === selectedComponentId;
-                      const myPin = isSource ? w.fromPin : w.labelText;
-                      const otherComp = isSource ? w.toComp : w.fromComp;
-                      const otherPin = isSource ? w.labelText : w.fromPin;
-                      
+                  {selectedWireId ? (
+                    (() => {
+                      const w = wirePaths.find(w => w.id === selectedWireId);
+                      if (!w) return null;
                       return (
-                        <div key={w.id} className="text-[10px] flex items-center justify-between bg-gray-900/50 px-2 py-1.5 rounded">
-                          <span className="font-mono text-gray-300 font-bold">{myPin}</span>
-                          <div className="flex-1 border-b border-dashed border-gray-700 mx-2"></div>
-                          <span className="text-gray-400 truncate max-w-[100px]" title={`${otherComp}:${otherPin}`}>
-                            {otherComp}:<span className="font-mono text-gray-300">{otherPin}</span>
-                          </span>
+                        <div className="flex flex-col gap-2">
+                          <div className="flex items-center justify-between bg-gray-900/50 p-3 rounded-lg border border-gray-700">
+                            <div className="flex flex-col text-left">
+                              <span className="text-[10px] text-gray-500 truncate max-w-[80px]" title={w.fromComp}>{w.fromComp}</span>
+                              <span className="text-xs font-mono font-bold text-gray-300">{w.fromPin}</span>
+                            </div>
+                            <div className="flex-1 px-4 flex items-center justify-center relative">
+                              <div className="w-full h-px border-t border-dashed border-gray-600"></div>
+                              <div className="absolute w-2 h-2 rounded-full" style={{ backgroundColor: w.color }}></div>
+                            </div>
+                            <div className="flex flex-col text-right">
+                              <span className="text-[10px] text-gray-500 truncate max-w-[80px]" title={w.toComp}>{w.toComp}</span>
+                              <span className="text-xs font-mono font-bold text-gray-300">{w.labelText}</span>
+                            </div>
+                          </div>
+                          
+                          <div className="bg-[#1a1a2e]/60 rounded-lg p-2.5 border border-blue-900/30">
+                            <h4 className="text-[9px] uppercase tracking-wider text-blue-400 font-bold mb-1.5">Estimated Telemetry</h4>
+                            <div className="grid grid-cols-2 gap-2">
+                              {Object.entries(getWireStats(w.color, w.fromPin, w.labelText)).map(([k, v]) => (
+                                <div key={k} className="flex flex-col">
+                                  <span className="text-[9px] text-gray-500">{k}</span>
+                                  <span className="text-[10px] text-gray-300 font-medium">{v}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
                         </div>
                       );
-                    })
+                    })()
+                  ) : (
+                    <div className="flex flex-col gap-3">
+                      {(() => {
+                        const compDef = data?.steps.flatMap(s => s.add_components || []).find(c => c.id === selectedComponentId);
+                        if (!compDef) return null;
+                        return (
+                          <div className="bg-[#1a1a2e]/60 rounded-lg p-2.5 border border-blue-900/30">
+                            <h4 className="text-[9px] uppercase tracking-wider text-blue-400 font-bold mb-1.5">Component Specs</h4>
+                            <div className="grid grid-cols-2 gap-2">
+                              {Object.entries(getComponentStats(compDef.type)).map(([k, v]) => (
+                                <div key={k} className="flex flex-col">
+                                  <span className="text-[9px] text-gray-500">{k}</span>
+                                  <span className="text-[10px] text-gray-300 font-medium">{v}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                      
+                      <div className="space-y-1.5">
+                        <h4 className="text-[9px] uppercase tracking-wider text-gray-400 font-bold px-1">Connections</h4>
+                        {wirePaths.filter(w => w.fromComp === selectedComponentId || w.toComp === selectedComponentId).length === 0 ? (
+                          <div className="text-[10px] text-gray-500 italic py-2 text-center">No wires connected in this step</div>
+                        ) : (
+                          wirePaths.filter(w => w.fromComp === selectedComponentId || w.toComp === selectedComponentId).map(w => {
+                            const isSource = w.fromComp === selectedComponentId;
+                            const myPin = isSource ? w.fromPin : w.labelText;
+                            const otherComp = isSource ? w.toComp : w.fromComp;
+                            const otherPin = isSource ? w.labelText : w.fromPin;
+                            
+                            return (
+                              <div key={w.id} className="text-[10px] flex items-center justify-between bg-gray-900/50 px-2 py-1.5 rounded">
+                                <span className="font-mono text-gray-300 font-bold">{myPin}</span>
+                                <div className="flex-1 border-b border-dashed border-gray-700 mx-2"></div>
+                                <span className="text-gray-400 truncate max-w-[100px]" title={`${otherComp}:${otherPin}`}>
+                                  {otherComp}:<span className="font-mono text-gray-300">{otherPin}</span>
+                                </span>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
                   )}
                 </div>
               </motion.div>
@@ -1208,9 +1317,10 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
           {/* Compact step bar */}
           <div className="bg-[#111]/95 backdrop-blur-md border border-gray-700 rounded-xl shadow-2xl flex items-center gap-2 px-3 py-2 pointer-events-auto">
             <button 
-              onClick={() => setDockPosition(p => p === 'bottom-right' ? 'top-left' : 'bottom-right')}
-              title="Shift Panel Position"
-              className="p-1.5 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors text-gray-400 mr-1"
+              onPointerDown={(e) => dragControls.start(e)}
+              style={{ touchAction: 'none' }}
+              title="Drag Panel"
+              className="p-1.5 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors text-gray-400 mr-1 cursor-grab active:cursor-grabbing pointer-events-auto"
             >
               <Move size={14} />
             </button>

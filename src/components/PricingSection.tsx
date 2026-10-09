@@ -6,7 +6,13 @@ import { CheckCircle2, X, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from './AuthProvider';
-import { getAdminPaymentSettings, submitPaymentVerification, PaymentSettings } from '@/lib/payments';
+import { getAdminPaymentSettings, submitPaymentVerification, approvePayment, PaymentSettings } from '@/lib/payments';
+
+declare global {
+  interface Window {
+    Razorpay: any;
+  }
+}
 import { Button } from '@/components/ui/button';
 
 // Reusing FadeIn for smooth reveals
@@ -35,8 +41,33 @@ export function PricingSection() {
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
 
+  const loadRazorpay = () => {
+    return new Promise((resolve) => {
+      if (window.Razorpay) {
+        resolve(true);
+        return;
+      }
+      
+      const existingScript = document.getElementById("razorpay-sdk");
+      if (existingScript) {
+        // If it's already injecting but not loaded yet
+        existingScript.addEventListener('load', () => resolve(true));
+        existingScript.addEventListener('error', () => resolve(false));
+        return;
+      }
+      
+      const script = document.createElement("script");
+      script.id = "razorpay-sdk";
+      script.src = "https://checkout.razorpay.com/v1/checkout.js";
+      script.onload = () => resolve(true);
+      script.onerror = () => resolve(false);
+      document.body.appendChild(script);
+    });
+  };
+
   useEffect(() => {
     getAdminPaymentSettings().then(setPaymentSettings);
+    loadRazorpay(); // Preload SDK
   }, []);
 
   const handlePlanClick = (planId: string, planName: string, price: string) => {
@@ -56,32 +87,71 @@ export function PricingSection() {
     setError('');
   };
 
-  const handleSubmitTxn = async () => {
+  const handleRazorpayPayment = async () => {
     if (!user) {
-      setError('Please login first to submit your payment verification.');
+      setError('Please login first to submit your payment.');
       router.push('/login?redirect=/#pricing');
-      return;
-    }
-
-    if (!txnId.trim()) {
-      setError('Please enter the UPI Transaction ID (UTR)');
       return;
     }
 
     setSubmitting(true);
     setError('');
-    try {
-      await submitPaymentVerification(user.uid, user.email, selectedPlan!.id, txnId.trim());
-      setSuccess(true);
-      setTimeout(() => {
-        setSelectedPlan(null);
-        router.push('/ide');
-      }, 3000);
-    } catch (err: any) {
-      setError(err.message || 'Failed to submit verification.');
-    } finally {
+
+    const res = await loadRazorpay();
+    if (!res) {
+      setError('Razorpay SDK failed to load. Are you online?');
       setSubmitting(false);
+      return;
     }
+
+    const options = {
+      key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || '', 
+      amount: parseInt(selectedPlan!.price) * 100, // in paise
+      currency: "INR",
+      name: "Hardware Studio",
+      description: `Subscription for ${selectedPlan!.name}`,
+      handler: async function (response: any) {
+        try {
+          // Create the payment record
+          const pId = await submitPaymentVerification(user.uid, user.email, selectedPlan!.id, response.razorpay_payment_id);
+          // Automatically approve it since Razorpay checkout succeeded
+          await approvePayment({
+            id: pId,
+            uid: user.uid,
+            email: user.email,
+            planId: selectedPlan!.id,
+            txnId: response.razorpay_payment_id,
+            status: 'pending',
+            createdAt: new Date()
+          });
+          setSuccess(true);
+          setTimeout(() => {
+            setSelectedPlan(null);
+            router.push('/ide');
+          }, 3000);
+        } catch (err: any) {
+          setError(err.message || 'Failed to process payment.');
+        }
+      },
+      prefill: {
+        email: user.email || '',
+      },
+      theme: {
+        color: "#2563eb",
+      },
+    };
+
+    const paymentObject = new window.Razorpay(options);
+    paymentObject.on("payment.failed", function (response: any) {
+      setError(response.error.description || 'Payment failed');
+      setSubmitting(false);
+    });
+    
+    paymentObject.on("payment.modal.closed", function() {
+      setSubmitting(false);
+    });
+    
+    paymentObject.open();
   };
 
   return (
@@ -183,30 +253,19 @@ export function PricingSection() {
                   <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
                     <CheckCircle2 className="w-8 h-8 text-green-600" />
                   </div>
-                  <h3 className="text-xl font-bold text-green-600 mb-2">Verification Pending</h3>
-                  <p className="text-center text-gray-500">Your payment details have been submitted. Your plan will be activated shortly.</p>
+                  <h3 className="text-xl font-bold text-green-600 mb-2">Payment Successful</h3>
+                  <p className="text-center text-gray-500">Your plan has been activated successfully! Redirecting...</p>
                 </div>
               ) : (
                 <>
                   <div className="flex flex-col items-center bg-gray-50 p-6 rounded-2xl border border-gray-100 mb-6">
-                    <p className="text-sm text-gray-500 mb-4 font-medium uppercase tracking-wider">Scan & Pay via UPI</p>
-                    
-                    <img src="/qr-code.png" alt="UPI QR Code" className="w-56 h-56 object-contain mb-4 rounded-xl border border-gray-200 bg-white p-2 shadow-sm" />
-
-                    <div className="w-full flex items-center gap-3 bg-white p-3 rounded-xl border border-gray-100 shadow-sm mb-2 text-left">
-                      <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center flex-shrink-0">
-                        <span className="text-xl">🏦</span>
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-semibold text-black leading-tight">Svc Co-operative Bank Ltd</p>
-                        <p className="text-xs text-gray-500">X00213 • Primary</p>
-                      </div>
-                    </div>
+                    <p className="text-sm text-gray-500 mb-2 font-medium uppercase tracking-wider">Total Amount</p>
+                    <div className="text-5xl font-black text-black">₹{selectedPlan.price}</div>
                   </div>
 
                   {!user ? (
                     <div className="flex flex-col gap-2 mt-2">
-                      <p className="text-sm text-gray-600 text-center mb-2">You must be logged in to submit a payment.</p>
+                      <p className="text-sm text-gray-600 text-center mb-2">You must be logged in to proceed with payment.</p>
                       <button 
                         onClick={() => router.push('/login?redirect=/#pricing')}
                         className="w-full bg-gray-900 hover:bg-black text-white font-bold py-3.5 rounded-xl transition-colors shadow-md flex items-center justify-center"
@@ -215,24 +274,16 @@ export function PricingSection() {
                       </button>
                     </div>
                   ) : (
-                    <div className="flex flex-col gap-2">
-                      <label className="text-sm font-semibold text-gray-700">UPI Transaction ID (UTR)</label>
-                      <input 
-                        type="text" 
-                        value={txnId} 
-                        onChange={e => setTxnId(e.target.value)} 
-                        placeholder="e.g. 312345678901"
-                        className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:border-green-500 focus:ring-2 focus:ring-green-200 outline-none transition-all text-black"
-                      />
-                      {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
-                      
+                    <div className="flex flex-col gap-2 mt-2">
+                      {error && <p className="text-red-500 text-sm mb-3 text-center bg-red-50 p-2 rounded-lg">{error}</p>}
                       <button 
-                        onClick={handleSubmitTxn}
+                        onClick={handleRazorpayPayment}
                         disabled={submitting}
-                        className="w-full mt-4 bg-green-500 hover:bg-green-600 text-white font-bold py-3.5 rounded-xl transition-colors shadow-md flex items-center justify-center"
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl transition-all shadow-lg hover:shadow-blue-500/30 flex items-center justify-center text-lg gap-2"
                       >
-                        {submitting ? <Loader2 className="w-5 h-5 animate-spin" /> : "Submit Verification"}
+                        {submitting ? <Loader2 className="w-5 h-5 animate-spin" /> : `Pay ₹${selectedPlan.price} Now`}
                       </button>
+                      <p className="text-xs text-gray-400 text-center mt-3">Secured by Razorpay</p>
                     </div>
                   )}
                 </>

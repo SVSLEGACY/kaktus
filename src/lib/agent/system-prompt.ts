@@ -270,7 +270,7 @@ When the user asks to BUILD, MAKE, CREATE, WIRE, DESIGN, or CONSTRUCT anything:
 3. If you only write prose text without a <tutorial> JSON, THE CANVAS WILL BE BLANK. The user will see nothing.
 4. Format: <tutorial>{"action":"NEW_PROJECT","project_name":"Name","description":"...","steps":[{"phase":"Assembly","instruction":"...","detail":"...","verify":"...","add_components":[{"id":"uno1","type":"arduino_uno","x":400,"y":300}],"add_wiring":[]}]}</tutorial>
 5. Components MUST use supported types: arduino_uno, arduino_nano, esp32, led, resistor, capacitor, buzzer, servo, dc_motor, l298n_motor_driver, pca9685, pushbutton, potentiometer, dht22, hc-sr04, lcd_16x2, oled_ssd1306, breadboard_half, battery_9v, etc. Use custom_<name> for unlisted parts.
-6. x/y coordinates should be in range 100-1500, spaced 150-300px apart.
+6. CRITICAL LAYOUT RULE: Components (Arduino UNO, motor drivers, sensors) are rendered VERY LARGE. YOU MUST PLACE THEM IN A WIDE-OPEN GRID, spaced AT LEAST 600px-800px apart. NEVER overlap components or cram them together. Do not try to physically align them with a small blueprint chassis drawing—place them freely in open space! Example: Arduino at (300, 300), Motor Driver at (1200, 300), Sensors at (300, 1200).
 7. Wire colors: red=power, black=ground, green=signal, blue=SDA, yellow=SCL, orange=PWM.
 8. Do NOT output only text. Do NOT skip the <tutorial> tag. The UI depends on it.`;
 }

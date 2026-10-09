@@ -39,15 +39,16 @@ export async function requestAgent(request: AgentRequest): Promise<AgentResponse
       try {
         const usageObj = JSON.parse(usageRaw);
         let currentTotal = 0;
-        for (const date in usageObj) {
-          for (const key in usageObj[date]) {
-            for (const model in usageObj[date][key]) {
-              currentTotal += usageObj[date][key][model];
+        const today = new Date().toISOString().split('T')[0];
+        if (usageObj[today]) {
+          for (const key in usageObj[today]) {
+            for (const model in usageObj[today][key]) {
+              currentTotal += usageObj[today][key][model];
             }
           }
         }
         const plan = localStorage.getItem('kaktus_user_plan') || 'free';
-        const limit = plan === 'free' ? 100000 : 200000;
+        const limit = plan === 'free' ? 50000 : 200000;
         
         if (currentTotal >= limit) {
           throw new Error(`Daily Quota Reached. You have exceeded your ${limit / 1000}k tokens limit. Please upgrade your plan to continue.`);

@@ -72,7 +72,7 @@ const CircuitCanvas = dynamic(() => import('@/components/CircuitCanvas').then((m
 export default function Home() {
   const router = useRouter();
   const { user, loading: authLoading, plan, planExpiresAt } = useAuth();
-  const tokenLimit = plan === 'free' ? 100000 : 200000;
+  const tokenLimit = plan === 'free' ? 50000 : 200000;
   const [apiKeys, setApiKeys] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
   
@@ -878,32 +878,45 @@ export default function Home() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm"
+              className="fixed inset-0 z-[9999] flex items-center justify-center bg-[#111111]/80 backdrop-blur-sm"
             >
               <motion.div 
-                initial={{ scale: 0.95, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                className="relative bg-[#18181b] border border-red-900/50 rounded-2xl p-8 max-w-md w-full shadow-2xl flex flex-col items-center text-center"
+                initial={{ scale: 0.95, opacity: 0, y: 10 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                className="relative bg-[#1c1c1c] rounded-2xl p-8 max-w-md w-full shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col items-center text-center"
               >
+                {/* Modal Stitching */}
+                <div className="absolute inset-2 rounded-xl border border-dashed border-gray-700/60 pointer-events-none" />
+                
                 <button
                   onClick={() => setIsQuotaModalDismissed(true)}
-                  className="absolute top-4 right-4 text-gray-500 hover:text-gray-300 transition-colors"
+                  className="absolute top-5 right-5 text-gray-600 hover:text-gray-400 transition-colors z-10"
                 >
-                  <X size={20} />
+                  <X size={16} strokeWidth={2.5} />
                 </button>
-                <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mb-6 mt-2">
-                  <ShieldAlert className="w-8 h-8 text-red-500" />
+                
+                <div className="relative w-16 h-16 bg-[#111] shadow-[inset_0_2px_10px_rgba(0,0,0,0.5)] rounded-full flex items-center justify-center mb-5 mt-2">
+                  {/* Icon Stitching */}
+                  <div className="absolute inset-1.5 rounded-full border border-dashed border-red-900/40 pointer-events-none" />
+                  <ShieldAlert className="w-6 h-6 text-red-500/90 z-10" strokeWidth={1.5} />
                 </div>
-                <h2 className="text-2xl font-bold text-gray-100 mb-3">Daily Quota Reached</h2>
-                <p className="text-gray-400 mb-8 leading-relaxed">
-                  You have exceeded your {tokenLimit / 1000}k tokens limit for today. Please upgrade your plan to continue chatting, building, and simulating.
+                
+                <h2 className="text-[22px] font-semibold text-[#f5f4e6] mb-3 tracking-wide">Daily Quota Reached</h2>
+                <p className="text-[#9ca3af] mb-8 text-[15px] leading-relaxed px-2">
+                  You have exceeded your {tokenLimit / 1000}k tokens limit for today.<br/>
+                  Please upgrade your plan to continue chatting,<br/> building, and simulating.
                 </p>
+                
                 <button
                   onClick={() => router.push('/#pricing')}
-                  className="w-full py-3.5 px-4 bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white rounded-xl font-semibold transition-all shadow-lg hover:shadow-blue-500/25 flex items-center justify-center gap-2"
+                  className="relative w-full py-3.5 px-4 bg-[#2b64d2] hover:bg-[#2353b3] text-white rounded-xl font-medium transition-all shadow-[0_4px_14px_0_rgba(43,100,210,0.39)] flex items-center justify-center gap-2 group overflow-hidden"
                 >
-                  Upgrade Plan to Continue
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                  {/* Button Stitching */}
+                  <div className="absolute inset-[3px] rounded-lg border border-dashed border-white/20 pointer-events-none transition-colors group-hover:border-white/30" />
+                  <span className="z-10 flex items-center gap-2 tracking-wide text-[15px]">
+                    Upgrade Plan to Continue
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="transition-transform group-hover:translate-x-1"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                  </span>
                 </button>
               </motion.div>
             </motion.div>
