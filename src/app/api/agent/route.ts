@@ -1,4 +1,4 @@
-export const runtime = 'nodejs';
+export const runtime = 'edge';
 
 const MAX_BODY_BYTES = 1_500_000;
 const MODEL_PATTERN = /^(?:models\/)?gemini-[a-zA-Z0-9._-]+$/;

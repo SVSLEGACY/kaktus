@@ -268,7 +268,7 @@ export function PricingSection() {
                       <p className="text-sm text-gray-600 text-center mb-2">You must be logged in to proceed with payment.</p>
                       <button 
                         onClick={() => router.push('/login?redirect=/#pricing')}
-                        className="w-full bg-gray-900 hover:bg-black text-white font-bold py-3.5 rounded-xl transition-colors shadow-md flex items-center justify-center"
+                        className="w-full bg-gray-900 hover:bg-black text-white font-bold py-3.5 rounded-xl transition-all duration-300 ease-in-out hover:scale-[1.02] active:scale-[0.98] shadow-md flex items-center justify-center"
                       >
                         Log In to Continue
                       </button>
@@ -279,7 +279,7 @@ export function PricingSection() {
                       <button 
                         onClick={handleRazorpayPayment}
                         disabled={submitting}
-                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl transition-all shadow-lg hover:shadow-blue-500/30 flex items-center justify-center text-lg gap-2"
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl transition-all duration-300 ease-in-out hover:scale-[1.02] active:scale-[0.98] shadow-lg hover:shadow-blue-500/30 flex items-center justify-center text-lg gap-2"
                       >
                         {submitting ? <Loader2 className="w-5 h-5 animate-spin" /> : `Pay ₹${selectedPlan.price} Now`}
                       </button>

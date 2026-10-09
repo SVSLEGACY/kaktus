@@ -48,7 +48,7 @@ export async function requestAgent(request: AgentRequest): Promise<AgentResponse
           }
         }
         const plan = localStorage.getItem('kaktus_user_plan') || 'free';
-        const limit = plan === 'free' ? 50000 : 200000;
+        const limit = plan === 'free' ? 5000000 : 20000000; // Reset limit: raised to 5M for free tier testing
         
         if (currentTotal >= limit) {
           throw new Error(`Daily Quota Reached. You have exceeded your ${limit / 1000}k tokens limit. Please upgrade your plan to continue.`);
