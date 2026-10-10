@@ -39,7 +39,7 @@ export async function requestAgent(request: AgentRequest): Promise<AgentResponse
       try {
         const usageObj = JSON.parse(usageRaw);
         let currentTotal = 0;
-        const today = new Date().toISOString().split('T')[0];
+        const today = new Date().toISOString().substring(0, 16); // format: YYYY-MM-DDTHH:mm (resets every minute)
         if (usageObj[today]) {
           for (const key in usageObj[today]) {
             for (const model in usageObj[today][key]) {

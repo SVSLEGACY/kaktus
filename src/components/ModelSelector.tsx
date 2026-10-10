@@ -1,8 +1,10 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, Lock } from 'lucide-react';
 import { listAgentModels } from '@/lib/agent/client';
+import { useAuth } from './AuthProvider';
+import { useRouter } from 'next/navigation';
 
 interface Model {
   name: string;
@@ -24,6 +26,20 @@ export function ModelSelector({ apiKey, selectedModel, onModelChange, variant = 
   const [error, setError] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const { plan } = useAuth();
+  const router = useRouter();
+
+  const isModelLocked = (id: string, currentPlan: string) => {
+    if (currentPlan === 'pro') return false;
+    if (currentPlan === 'booster') {
+      return ['models/gemini-3.7-flash', 'models/gemini-3.8-flash'].includes(id);
+    }
+    if (currentPlan === 'starter') {
+      return ['models/gemini-3.5-flash', 'models/gemini-3.6-flash', 'models/gemini-3.7-flash', 'models/gemini-3.8-flash'].includes(id);
+    }
+    // Free
+    return ['models/gemini-3.5-flash-lite', 'models/gemini-3.5-flash', 'models/gemini-3.6-flash', 'models/gemini-3.7-flash', 'models/gemini-3.8-flash'].includes(id);
+  };
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -104,17 +120,25 @@ export function ModelSelector({ apiKey, selectedModel, onModelChange, variant = 
           <div className="flex flex-col p-1.5 max-h-[300px] overflow-y-auto custom-scrollbar">
             {models.map((model) => {
               const isActive = selectedModel === model.name;
+              const locked = isModelLocked(model.name, plan);
               return (
                 <button
                   key={model.name}
                   onClick={() => {
-                    onModelChange(model.name);
-                    setIsOpen(false);
+                    if (locked) {
+                      router.push('/#pricing');
+                    } else {
+                      onModelChange(model.name);
+                      setIsOpen(false);
+                    }
                   }}
                   className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-xs transition-colors ${isActive ? 'bg-[#2a2a2a] text-white' : 'text-gray-400 hover:bg-[#222] hover:text-gray-200'}`}
                 >
-                  <span className="font-medium text-left">{getCleanLabel(model)}</span>
-                  {isActive && <ChevronRight size={14} className="opacity-100 flex-shrink-0" />}
+                  <div className="flex items-center gap-2">
+                    <span className={`font-medium text-left ${locked ? 'opacity-50' : ''}`}>{getCleanLabel(model)}</span>
+                    {locked && <span className="bg-orange-500/20 text-orange-400 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider flex items-center gap-1"><Lock size={8} /> Upgrade</span>}
+                  </div>
+                  {isActive && !locked && <ChevronRight size={14} className="opacity-100 flex-shrink-0" />}
                 </button>
               );
             })}

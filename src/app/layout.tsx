@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/components/AuthProvider";
+import { Toaster } from 'sonner';
 
 export const metadata: Metadata = {
   title: "Kaktus — AI hardware studio",
@@ -33,6 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <AuthProvider>
           {children}
         </AuthProvider>
+        <Toaster richColors closeButton />
         <div className="prototype-label fixed bottom-2 left-2 z-[9999] font-mono text-[10px] px-2 py-1 pointer-events-none select-none uppercase">
           Prototype Version
         </div>

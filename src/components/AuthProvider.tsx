@@ -2,9 +2,10 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
 import { useRouter, usePathname } from 'next/navigation';
+import { toast } from 'sonner';
 
 interface AuthContextType {
   user: User | null;
@@ -26,44 +27,48 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser: User | null) => {
+    let unsubscribeDoc: any = null;
+    
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser: User | null) => {
       setUser(currentUser);
       
       if (currentUser) {
-        try {
-          const docSnap = await getDoc(doc(db, 'users', currentUser.uid));
-          const docData = docSnap.exists() ? docSnap.data() : null;
-          let p = docData?.plan || 'free';
-          let expires: Date | null = null;
-          
-          if (docData?.planExpiresAt) {
-            const expiresAt = docData.planExpiresAt.toDate ? docData.planExpiresAt.toDate() : new Date(docData.planExpiresAt);
-            if (new Date() > expiresAt) {
-              p = 'free';
-              // Update in Firestore to clear expired plan
-              import('firebase/firestore').then(({ updateDoc }) => {
-                updateDoc(doc(db, 'users', currentUser.uid), { plan: 'free' }).catch(console.error);
-              });
-            } else {
-              expires = expiresAt;
+        import('firebase/firestore').then(({ doc, onSnapshot }) => {
+          unsubscribeDoc = onSnapshot(doc(db, 'users', currentUser.uid), (docSnap) => {
+            const docData = docSnap.exists() ? docSnap.data() : null;
+            let p = docData?.plan || 'free';
+            let expires: Date | null = null;
+            
+            if (docData?.planExpiresAt) {
+              const expiresAt = docData.planExpiresAt.toDate ? docData.planExpiresAt.toDate() : new Date(docData.planExpiresAt);
+              if (new Date() > expiresAt) {
+                p = 'free';
+                // Only update if it wasn't already free to prevent infinite loops
+                if (docData.plan !== 'free') {
+                   import('firebase/firestore').then(({ updateDoc }) => {
+                     updateDoc(doc(db, 'users', currentUser.uid), { plan: 'free' }).catch(console.error);
+                   });
+                }
+              } else {
+                expires = expiresAt;
+              }
             }
-          }
-          
-          setPlan(p);
-          setPlanExpiresAt(expires);
-          localStorage.setItem('kaktus_user_plan', p);
-          localStorage.setItem('kaktus_user_uid', currentUser.uid);
-        } catch (e) {
-          console.error("Failed to fetch plan", e);
-        }
+            
+            setPlan(p);
+            setPlanExpiresAt(expires);
+            localStorage.setItem('kaktus_user_plan', p);
+            localStorage.setItem('kaktus_user_uid', currentUser.uid);
+            setLoading(false);
+          });
+        });
       } else {
         setPlan('free');
         setPlanExpiresAt(null);
         localStorage.removeItem('kaktus_user_plan');
         localStorage.removeItem('kaktus_user_uid');
+        setLoading(false);
+        if (unsubscribeDoc) unsubscribeDoc();
       }
-      
-      setLoading(false);
       
       // Route guarding logic
       if (!currentUser && (pathname === '/ide' || pathname === '/pcb-designer')) {
@@ -71,8 +76,83 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeDoc) unsubscribeDoc();
+    };
   }, [pathname, router]);
+
+  // Separate effect for intervals
+  useEffect(() => {
+    if (!user) return;
+    
+    let lastRestored = parseInt(localStorage.getItem(`lastTokenReset_${user.uid}`) || '0');
+    if (lastRestored === 0) {
+      lastRestored = Date.now();
+      localStorage.setItem(`lastTokenReset_${user.uid}`, lastRestored.toString());
+    }
+    
+    let warningGiven = false;
+
+    const interval = setInterval(() => {
+      const now = Date.now();
+      
+      // 1. Expiry & 45s Warning Logic
+      if (planExpiresAt) {
+        const expires = planExpiresAt.getTime();
+        const diffSeconds = Math.floor((expires - now) / 1000);
+
+        // Auto-downgrade
+        if (diffSeconds <= 0) {
+          clearInterval(interval);
+          import('firebase/firestore').then(async ({ updateDoc, doc }) => {
+            await updateDoc(doc(db, 'users', user.uid), { plan: 'free' });
+            setPlan('free');
+            toast.error('Your subscription has expired!', { duration: Infinity });
+          });
+          return;
+        }
+
+        // 45 sec warning
+        if (diffSeconds <= 45 && !warningGiven) {
+          warningGiven = true;
+          toast.error('Attention: Your subscription is expiring in 45 seconds!', {
+            duration: 10000,
+            position: 'top-center',
+          });
+        }
+      }
+
+      // 2. 24-Hour Daily Quota (Tokens) Restore Logic
+      if (now - lastRestored >= 24 * 60 * 60 * 1000) {
+        lastRestored = now;
+        localStorage.setItem(`lastTokenReset_${user.uid}`, now.toString());
+        
+        let maxRuns = 0;
+        if (plan === 'free') maxRuns = 5;
+        if (plan === 'starter') maxRuns = 10;
+        if (plan === 'booster') maxRuns = 20;
+        if (plan === 'pro') maxRuns = 50;
+
+        if (maxRuns > 0) {
+          import('firebase/firestore').then(async ({ updateDoc, doc }) => {
+            await updateDoc(doc(db, 'users', user.uid), { proRuns: maxRuns });
+            
+            // Clear local storage token usage to reset the UI token bar
+            localStorage.removeItem(`gemini_key_usage_stats_${user.uid}`);
+            window.dispatchEvent(new Event('geminiUsageUpdated'));
+            
+            toast.success(`Daily Quota Renewed: Your tokens and runs have been refreshed.`, {
+              duration: 10000,
+              position: 'bottom-right'
+            });
+          });
+        }
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [plan, planExpiresAt?.getTime(), user?.uid]);
 
   return (
     <AuthContext.Provider value={{ user, loading, plan, planExpiresAt }}>

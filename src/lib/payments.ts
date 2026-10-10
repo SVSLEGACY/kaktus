@@ -72,13 +72,14 @@ export const approvePayment = async (txn: PaymentTransaction) => {
   
   let expiresAt = new Date();
   if (txn.planId === 'starter') {
-    expiresAt.setMinutes(expiresAt.getMinutes() + 5);
+    expiresAt.setDate(expiresAt.getDate() + 7); // 1 week
   } else if (txn.planId === 'booster') {
-    expiresAt.setDate(expiresAt.getDate() + 14);
+    expiresAt.setDate(expiresAt.getDate() + 14); // 2 weeks
   } else if (txn.planId === 'pro') {
-    expiresAt.setDate(expiresAt.getDate() + 30);
+    expiresAt.setDate(expiresAt.getDate() + 30); // 1 month
+  } else {
+    expiresAt.setMinutes(expiresAt.getMinutes() + 10); // fallback testing
   }
-
   await setDoc(userRef, {
     plan: txn.planId,
     proRuns: currentProRuns + proRuns,
@@ -90,3 +91,41 @@ export const approvePayment = async (txn: PaymentTransaction) => {
 export const rejectPayment = async (txnId: string) => {
   await updateDoc(doc(db, 'payments', txnId), { status: 'rejected' });
 };
+
+export const verifyAndClaimUtr = async (uid: string, email: string | null, planId: string, txnId: string): Promise<boolean> => {
+  const utrRef = doc(db, 'received_utrs', txnId);
+  const utrSnap = await getDoc(utrRef);
+  
+  if (utrSnap.exists()) {
+    const data = utrSnap.data();
+    if (data.used) {
+      throw new Error('This Transaction ID has already been claimed.');
+    }
+    
+    // Mark as used
+    await updateDoc(utrRef, { used: true, claimedBy: uid, claimedAt: serverTimestamp() });
+    
+    // Create an approved payment record
+    const pId = doc(collection(db, 'payments')).id;
+    const txn: PaymentTransaction = {
+      id: pId,
+      uid,
+      email,
+      planId,
+      txnId,
+      status: 'approved',
+      createdAt: serverTimestamp()
+    };
+    
+    // Save the approved payment
+    await setDoc(doc(db, 'payments', pId), txn);
+    
+    // Grant the plan to the user instantly
+    await approvePayment(txn);
+    return true;
+  }
+  
+  // If not found in our confirmed UTRs list
+  return false;
+};
+

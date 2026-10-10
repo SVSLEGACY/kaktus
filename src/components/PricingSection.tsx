@@ -1,18 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle2, X, Loader2 } from 'lucide-react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from './AuthProvider';
-import { getAdminPaymentSettings, submitPaymentVerification, approvePayment, PaymentSettings } from '@/lib/payments';
-
-declare global {
-  interface Window {
-    Razorpay: any;
-  }
-}
 import { Button } from '@/components/ui/button';
 
 // Reusing FadeIn for smooth reveals
@@ -35,42 +27,14 @@ export function PricingSection() {
   const router = useRouter();
   
   const [selectedPlan, setSelectedPlan] = useState<{ id: string, name: string, price: string } | null>(null);
-  const [paymentSettings, setPaymentSettings] = useState<PaymentSettings | null>(null);
-  const [txnId, setTxnId] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
+  
+  // Prefetched Cashfree data
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [cashfreeInstance, setCashfreeInstance] = useState<any>(null);
 
-  const loadRazorpay = () => {
-    return new Promise((resolve) => {
-      if (window.Razorpay) {
-        resolve(true);
-        return;
-      }
-      
-      const existingScript = document.getElementById("razorpay-sdk");
-      if (existingScript) {
-        // If it's already injecting but not loaded yet
-        existingScript.addEventListener('load', () => resolve(true));
-        existingScript.addEventListener('error', () => resolve(false));
-        return;
-      }
-      
-      const script = document.createElement("script");
-      script.id = "razorpay-sdk";
-      script.src = "https://checkout.razorpay.com/v1/checkout.js";
-      script.onload = () => resolve(true);
-      script.onerror = () => resolve(false);
-      document.body.appendChild(script);
-    });
-  };
-
-  useEffect(() => {
-    getAdminPaymentSettings().then(setPaymentSettings);
-    loadRazorpay(); // Preload SDK
-  }, []);
-
-  const handlePlanClick = (planId: string, planName: string, price: string) => {
+  const handlePlanClick = async (planId: string, planName: string, price: string) => {
     if (!user) {
       router.push(planId === 'free' ? '/login?redirect=/ide' : '/login?redirect=/#pricing');
       return;
@@ -82,76 +46,86 @@ export function PricingSection() {
     }
 
     setSelectedPlan({ id: planId, name: planName, price });
-    setTxnId('');
-    setSuccess(false);
     setError('');
+    setSessionId(null); // Reset
+    
+    // 1. Start prefetching SDK immediately
+    import('@cashfreepayments/cashfree-js').then(({ load }) => {
+      load({
+        mode: process.env.NEXT_PUBLIC_CASHFREE_ENV === 'PRODUCTION' ? 'production' : 'sandbox',
+      }).then(cf => setCashfreeInstance(cf));
+    });
+
+    // 2. Start prefetching order session immediately
+    try {
+      const response = await fetch('/api/cashfree/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          planId,
+          amount: price,
+          customerId: user.uid,
+          customerEmail: user.email,
+        }),
+      });
+      const data = await response.json();
+      if (response.ok && data.payment_session_id) {
+        setSessionId(data.payment_session_id);
+      }
+    } catch (e) {
+      console.error("Prefetch order failed", e);
+    }
   };
 
-  const handleRazorpayPayment = async () => {
+  const handleCashfreePayment = async () => {
     if (!user) {
-      setError('Please login first to submit your payment.');
-      router.push('/login?redirect=/#pricing');
+      setError('Please login first to proceed with payment.');
       return;
     }
 
     setSubmitting(true);
     setError('');
 
-    const res = await loadRazorpay();
-    if (!res) {
-      setError('Razorpay SDK failed to load. Are you online?');
-      setSubmitting(false);
-      return;
-    }
+    try {
+      // If prefetch failed or is still loading, fetch again (fallback)
+      let currentSessionId = sessionId;
+      let cf = cashfreeInstance;
 
-    const options = {
-      key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || '', 
-      amount: parseInt(selectedPlan!.price) * 100, // in paise
-      currency: "INR",
-      name: "Hardware Studio",
-      description: `Subscription for ${selectedPlan!.name}`,
-      handler: async function (response: any) {
-        try {
-          // Create the payment record
-          const pId = await submitPaymentVerification(user.uid, user.email, selectedPlan!.id, response.razorpay_payment_id);
-          // Automatically approve it since Razorpay checkout succeeded
-          await approvePayment({
-            id: pId,
-            uid: user.uid,
-            email: user.email,
+      if (!currentSessionId) {
+        const response = await fetch('/api/cashfree/create-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
             planId: selectedPlan!.id,
-            txnId: response.razorpay_payment_id,
-            status: 'pending',
-            createdAt: new Date()
-          });
-          setSuccess(true);
-          setTimeout(() => {
-            setSelectedPlan(null);
-            router.push('/ide');
-          }, 3000);
-        } catch (err: any) {
-          setError(err.message || 'Failed to process payment.');
-        }
-      },
-      prefill: {
-        email: user.email || '',
-      },
-      theme: {
-        color: "#2563eb",
-      },
-    };
+            amount: selectedPlan!.price,
+            customerId: user.uid,
+            customerEmail: user.email,
+          }),
+        });
 
-    const paymentObject = new window.Razorpay(options);
-    paymentObject.on("payment.failed", function (response: any) {
-      setError(response.error.description || 'Payment failed');
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Failed to create payment session.');
+        currentSessionId = data.payment_session_id;
+      }
+
+      if (!cf) {
+        const { load } = await import('@cashfreepayments/cashfree-js');
+        cf = await load({
+          mode: process.env.NEXT_PUBLIC_CASHFREE_ENV === 'PRODUCTION' ? 'production' : 'sandbox',
+        });
+      }
+
+      // INSTANT CHECKOUT via Modal for better UX
+      cf.checkout({
+        paymentSessionId: currentSessionId,
+        redirectTarget: "_modal",
+      });
+    } catch (err: any) {
+      console.error("Checkout error:", err);
+      setError(typeof err === 'string' ? err : (err.message || 'Payment initialization failed.'));
+      setSessionId(null); // Clear the expired/failed session so a new one is fetched on retry
       setSubmitting(false);
-    });
-    
-    paymentObject.on("payment.modal.closed", function() {
-      setSubmitting(false);
-    });
-    
-    paymentObject.open();
+    }
   };
 
   return (
@@ -169,27 +143,28 @@ export function PricingSection() {
           <FadeIn delay={0.1} className="price-card fabric-panel flex flex-col p-6 relative">
             <h3 className="text-2xl font-bold mb-2">Free</h3>
             <p className="text-gray-500 mb-6">Perfect for learning and simple circuits.</p>
-            <div className="text-5xl font-black mb-8">₹0<span className="text-lg text-gray-400 font-normal">/week</span></div>
-            <ul className="flex flex-col gap-4 mb-8 flex-grow">
-              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-medium text-black">25 Flash Runs / week</span></li>
-              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">Standard AI Models</span></li>
-              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">Circuit Canvas</span></li>
+            <div className="text-5xl font-black mb-8">₹0<span className="text-lg text-gray-400 font-normal">/mo</span></div>
+            <ul className="flex flex-col gap-4 mb-8 flex-grow text-sm">
+              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-bold text-black">25k Tokens Daily</span></li>
+              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-medium">5 Flash Runs Daily</span></li>
+              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">Gemini 2.5 Flash / Lite</span></li>
             </ul>
             <Button variant="outline" onClick={() => handlePlanClick('free', 'Free', '0')} className="w-full py-4 h-auto text-center font-bold">
-              Get Started
+              Current Plan
             </Button>
           </FadeIn>
 
           {/* 1 Week Plan */}
           <FadeIn delay={0.2} className="price-card featured-price fabric-panel flex flex-col p-6 relative z-10">
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-green-500 text-white px-4 py-1 rounded-full text-sm font-bold tracking-wide">TESTING</div>
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-green-500 text-white px-4 py-1 rounded-full text-xs font-bold tracking-wide">POPULAR</div>
             <h3 className="text-2xl font-bold mb-2">Starter</h3>
-            <p className="text-gray-500 mb-6">Try the full power for a week.</p>
+            <p className="text-gray-500 mb-6">Unlock better reasoning for 1 week.</p>
             <div className="text-5xl font-black mb-8">₹29<span className="text-lg text-gray-400 font-normal">/week</span></div>
-            <ul className="flex flex-col gap-4 mb-8 flex-grow">
-              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-medium">Unlimited Flash</span></li>
-              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-bold text-black">10 Pro Runs</span></li>
-              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">Complex Reasoning</span></li>
+            <ul className="flex flex-col gap-4 mb-8 flex-grow text-sm">
+              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-bold text-black">40k Tokens Daily</span></li>
+              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-medium">10 Flash Runs Daily</span></li>
+              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-blue-600 font-bold">Unlocks 3.5 Flash-Lite</span></li>
+              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">15x Reasoning Capacity</span></li>
             </ul>
             <Button onClick={() => handlePlanClick('starter', 'Starter', '29')} className="w-full py-4 h-auto text-center font-bold">
               Start Trial
@@ -199,12 +174,13 @@ export function PricingSection() {
           {/* 2 Week Plan */}
           <FadeIn delay={0.3} className="price-card fabric-panel flex flex-col p-6 relative">
             <h3 className="text-2xl font-bold mb-2">Booster</h3>
-            <p className="text-gray-500 mb-6">For your mid-term projects.</p>
-            <div className="text-5xl font-black mb-8">₹59<span className="text-lg text-gray-400 font-normal">/2 wks</span></div>
-            <ul className="flex flex-col gap-4 mb-8 flex-grow">
-              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-medium">Unlimited Flash</span></li>
-              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-bold text-black">20 Pro Runs</span></li>
-              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">Zero-bug Generation</span></li>
+            <p className="text-gray-500 mb-6">For your mid-term projects (2 weeks).</p>
+            <div className="text-5xl font-black mb-8">₹59<span className="text-lg text-gray-400 font-normal">/14 days</span></div>
+            <ul className="flex flex-col gap-4 mb-8 flex-grow text-sm">
+              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-bold text-black">60k Tokens Daily</span></li>
+              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-medium">20 Flash Runs Daily</span></li>
+              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-blue-600 font-bold">Unlocks 3.5 & 3.6 Flash</span></li>
+              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">30x Reasoning Capacity</span></li>
             </ul>
             <Button variant="secondary" onClick={() => handlePlanClick('booster', 'Booster', '59')} className="dark-patch w-full py-4 h-auto text-center font-bold">
               Upgrade
@@ -215,17 +191,36 @@ export function PricingSection() {
           <FadeIn delay={0.4} className="price-card fabric-panel flex flex-col p-6 relative">
             <h3 className="text-2xl font-bold mb-2">Pro</h3>
             <p className="text-gray-500 mb-6">For serious builders and engineers.</p>
-            <div className="text-5xl font-black mb-8">₹159<span className="text-lg text-gray-400 font-normal">/mo</span></div>
-            <ul className="flex flex-col gap-4 mb-8 flex-grow">
-              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-medium">Unlimited Flash</span></li>
-              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-bold text-black">50 Pro Runs</span></li>
-              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">Priority Processing</span></li>
+            <div className="text-5xl font-black mb-8">₹159<span className="text-lg text-gray-400 font-normal">/month</span></div>
+            <ul className="flex flex-col gap-4 mb-8 flex-grow text-sm">
+              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-bold text-black">100k Tokens Daily</span></li>
+              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-medium">50 Flash Runs Daily</span></li>
+              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-blue-600 font-bold">Unlocks 3.7 & 3.8 Flash</span></li>
+              <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">100x Reasoning Capacity</span></li>
             </ul>
             <Button variant="secondary" onClick={() => handlePlanClick('pro', 'Pro', '159')} className="dark-patch w-full py-4 h-auto text-center font-bold">
               Upgrade
             </Button>
           </FadeIn>
         </div>
+
+        {/* Enterprise / Custom Plan */}
+        <FadeIn delay={0.5} className="mt-8 w-full max-w-6xl">
+          <div className="bg-gradient-to-r from-gray-900 to-black rounded-3xl p-8 md:p-12 flex flex-col md:flex-row items-center justify-between text-white shadow-2xl">
+            <div className="mb-6 md:mb-0 text-center md:text-left">
+              <h3 className="text-3xl font-bold mb-2">Need Custom Tokens?</h3>
+              <p className="text-gray-400 max-w-xl">
+                Require massive token limits, custom enterprise models, or team API access? Contact our admin to get a personalized pricing plan tailored for your heavy workloads.
+              </p>
+            </div>
+            <a 
+              href="mailto:admin@kaktus.com?subject=Custom Enterprise Pricing Inquiry" 
+              className="bg-white text-black hover:bg-gray-200 font-bold py-4 px-8 rounded-xl transition-all duration-300 hover:scale-105 active:scale-95 shadow-xl whitespace-nowrap"
+            >
+              Contact Admin
+            </a>
+          </div>
+        </FadeIn>
       </div>
 
       {/* Payment Modal */}
@@ -248,15 +243,6 @@ export function PricingSection() {
               <h2 className="text-2xl font-bold mb-2 text-center text-black">Complete Payment</h2>
               <p className="text-gray-500 text-center mb-6">Plan: {selectedPlan.name} (₹{selectedPlan.price})</p>
 
-              {success ? (
-                <div className="flex flex-col items-center justify-center py-10">
-                  <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
-                    <CheckCircle2 className="w-8 h-8 text-green-600" />
-                  </div>
-                  <h3 className="text-xl font-bold text-green-600 mb-2">Payment Successful</h3>
-                  <p className="text-center text-gray-500">Your plan has been activated successfully! Redirecting...</p>
-                </div>
-              ) : (
                 <>
                   <div className="flex flex-col items-center bg-gray-50 p-6 rounded-2xl border border-gray-100 mb-6">
                     <p className="text-sm text-gray-500 mb-2 font-medium uppercase tracking-wider">Total Amount</p>
@@ -274,20 +260,25 @@ export function PricingSection() {
                       </button>
                     </div>
                   ) : (
-                    <div className="flex flex-col gap-2 mt-2">
-                      {error && <p className="text-red-500 text-sm mb-3 text-center bg-red-50 p-2 rounded-lg">{error}</p>}
+                    <div className="flex flex-col gap-4 mt-2">
+                      {error && <p className="text-red-600 text-sm text-center bg-red-50 p-3 rounded-lg border border-red-200">{error}</p>}
                       <button 
-                        onClick={handleRazorpayPayment}
-                        disabled={submitting}
-                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl transition-all duration-300 ease-in-out hover:scale-[1.02] active:scale-[0.98] shadow-lg hover:shadow-blue-500/30 flex items-center justify-center text-lg gap-2"
+                        onClick={handleCashfreePayment}
+                        disabled={submitting || (!sessionId && !error && !submitting)}
+                        className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl transition-all duration-300 ease-in-out shadow-lg flex items-center justify-center text-lg gap-2"
                       >
-                        {submitting ? <Loader2 className="w-5 h-5 animate-spin" /> : `Pay ₹${selectedPlan.price} Now`}
+                        {submitting ? (
+                          <><Loader2 className="w-5 h-5 animate-spin" /> Opening Gateway...</>
+                        ) : (!sessionId && !error) ? (
+                          <><Loader2 className="w-5 h-5 animate-spin" /> Preparing Session...</>
+                        ) : (
+                          'Pay Now with Cashfree'
+                        )}
                       </button>
-                      <p className="text-xs text-gray-400 text-center mt-3">Secured by Razorpay</p>
+                      <p className="text-xs text-gray-400 text-center mt-1">Payment will securely open in a popup.</p>
                     </div>
                   )}
                 </>
-              )}
             </motion.div>
           </div>
         )}
