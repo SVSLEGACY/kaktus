@@ -1,26 +1,20 @@
 'use client';
 
-import { Suspense } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { 
   Settings, Cpu, Cable, Zap, CircuitBoard, Usb, 
   TerminalSquare, Box, Component, MonitorDot, Database, Rocket,
-  Brain, Microchip, ShieldAlert, Sparkles, Code2, Layers, CheckCircle2,
-  LogOut
+  Brain, Code2, LogOut
 } from 'lucide-react';
 import { auth } from '@/lib/firebase';
 import { signOut } from 'firebase/auth';
 
 import { PricingSection } from '@/components/PricingSection';
-import { ScrollStitch } from '@/components/ScrollStitch';
 import { useAuth } from '@/components/AuthProvider';
-import embroideredBrain from '@/assets/embroidered-brain.png';
 
 const HeroCanvas = dynamic(() => import('@/components/HeroCanvas'), { ssr: false });
-
-
 
 // Custom typing animation component with adjustable speed
 function TypingText({ text, as: Component = "div", className = "", delaySpeed = 0.1, duration = 0.4 }: { text: string, as?: any, className?: string, delaySpeed?: number, duration?: number }) {
@@ -73,19 +67,14 @@ export default function LandingPage() {
     Component, Zap, Database, Usb, MonitorDot, Rocket
   ];
 
-  const brainImgSrc = typeof embroideredBrain === 'string' 
-    ? embroideredBrain 
-    : (embroideredBrain as any)?.src || '/assets/embroidered-brain.png';
-
   return (
-    <div className="kaktus-home w-full min-h-screen bg-background text-foreground font-sans selection:bg-primary/20 overflow-x-hidden">
-      <ScrollStitch />
+    <div className="w-full min-h-screen bg-white text-[#111] font-sans selection:bg-green-500/20 overflow-x-hidden">
       
-      {/* Navbar: Fully Transparent, No Border */}
-      <header className="fixed top-0 left-0 right-0 h-20 flex items-center justify-between px-6 md:px-12 z-50 bg-transparent">
+      {/* Navbar */}
+      <header className="fixed top-0 left-0 right-0 h-20 flex items-center justify-between px-6 md:px-12 z-50 bg-white/90 backdrop-blur-md border-b border-gray-100">
         <div className="flex items-center gap-3">
           <Link href="/" className="flex items-center gap-2">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="text-green-600">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
               <defs>
                 <linearGradient id="logoGrad" x1="0" y1="24" x2="24" y2="0" gradientUnits="userSpaceOnUse">
                   <stop offset="0%" stopColor="#eab308" />
@@ -118,21 +107,25 @@ export default function LandingPage() {
           <Link href="/app-info" className="hover:text-black transition-colors">App Info</Link>
           <Link href="/how-to-use" className="hover:text-black transition-colors">How to Use</Link>
           <a href="#pricing" className="hover:text-black transition-colors">Pricing</a>
-          {!user ? (
-            <Link href="/login" className="font-semibold text-green-600 hover:text-green-700">Login</Link>
-          ) : (
-            <Link href="/ide" className="font-semibold text-green-600 hover:text-green-700">Workspace</Link>
-          )}
         </nav>
-        
-        <div className="w-[100px] hidden md:block"></div>
+
+        <div className="flex items-center gap-4">
+          <Link 
+            href="/ide"
+            className="px-5 py-2.5 rounded-full bg-[#111] text-white text-sm font-semibold hover:bg-black transition-all hover:scale-105 shadow-sm"
+          >
+            Open IDE
+          </Link>
+        </div>
       </header>
 
       {/* Hero Section */}
-      <main className="fabric-hero relative w-full flex flex-col justify-center items-center text-center">
+      <main className="relative w-full h-screen flex flex-col justify-center items-center text-center">
         
-        {/* 3D Background (Lazy loaded) */}
-        <HeroCanvas />
+        {/* 3D Background */}
+        <div className="absolute inset-0 z-0 pointer-events-none opacity-60">
+          <HeroCanvas />
+        </div>
 
         {/* Hero Content */}
         <div className="relative z-10 flex flex-col items-center max-w-5xl px-6 mt-10">
@@ -152,14 +145,14 @@ export default function LandingPage() {
             as="h1"
             delaySpeed={0.25}
             duration={0.6}
-            className="hero-title leading-[1.12] font-black text-foreground mb-10 flex flex-wrap justify-center"
+            className="text-5xl md:text-7xl lg:text-[5rem] leading-[1.1] font-bold tracking-tight text-[#111] mb-10 flex flex-wrap justify-center"
           />
         </div>
       </main>
 
       {/* Intro Arc Section */}
-      <section className="intro-section w-full min-h-[60vh] flex flex-col items-center justify-center py-10 px-6 relative z-10">
-        <div className="patch-arc flex justify-center items-end h-40 mb-16 gap-3 md:gap-5">
+      <section className="w-full min-h-[60vh] bg-white flex flex-col items-center justify-center py-10 px-6 relative z-10">
+        <div className="flex justify-center items-end h-40 mb-16 gap-3 md:gap-5">
           {icons.map((Icon, i) => {
             const center = (icons.length - 1) / 2;
             const dist = Math.abs(i - center);
@@ -172,7 +165,7 @@ export default function LandingPage() {
                 whileInView={{ opacity: 1, y: translateY }}
                 viewport={{ once: true, margin: "-10%" }}
                 transition={{ duration: 0.5, delay: i * 0.05 }}
-                className="icon-patch w-10 h-10 md:w-14 md:h-14 rounded-full flex items-center justify-center"
+                className="w-10 h-10 md:w-14 md:h-14 rounded-full border border-gray-100 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.05)] bg-white flex items-center justify-center text-gray-400"
               >
                 <Icon size={20} strokeWidth={1.5} />
               </motion.div>
@@ -189,37 +182,36 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* New High-Level Info Sections for Main Page */}
-      <section className="intelligence-section relative w-full py-32 px-6 md:px-12">
-        <div className="relative z-10 max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-10 md:gap-16 items-center">
+      {/* High-Level Info Sections for Main Page */}
+      <section className="w-full py-32 px-6 md:px-12 bg-white border-t border-gray-100">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-20 items-center">
           <FadeIn>
-            <div className="intelligence-badge w-14 h-14 flex items-center justify-center mb-8">
-              <Brain className="w-7 h-7 text-accent" />
+            <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mb-8">
+              <Brain className="w-8 h-8 text-orange-500" />
             </div>
-            <h2 className="text-4xl md:text-6xl font-bold mb-6">Omniscient <span className="text-primary">Intelligence.</span></h2>
-            <p className="text-xl text-muted-foreground leading-relaxed mb-8">
+            <h2 className="text-4xl md:text-6xl font-bold tracking-tight mb-6">Omniscient Intelligence.</h2>
+            <p className="text-xl text-gray-500 leading-relaxed mb-8">
               We replaced thousands of datasheets and hours of manual routing with a single, omniscient AGI core that understands physics.
             </p>
-            <Link href="/app-info" className="intelligence-link inline-flex items-center gap-2 text-accent font-bold hover:text-primary transition-colors">
+            <Link href="/app-info" className="inline-flex items-center gap-2 text-orange-600 font-medium hover:text-orange-700">
               Read how the engine works <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
             </Link>
           </FadeIn>
-          <FadeIn delay={0.2} className="intelligence-embroidery flex items-center justify-center">
-            <img 
-              src={brainImgSrc} 
-              alt="Brain embroidered in cactus green and orange yarn" 
-              loading="lazy" 
-              width={1024} 
-              height={1024} 
-              className="w-full max-w-md h-auto" 
-            />
+          <FadeIn delay={0.2} className="bg-gray-50 rounded-3xl p-12 h-96 flex items-center justify-center border border-gray-100 shadow-inner">
+            {/* Minimal graphic representing intelligence */}
+            <div className="relative w-40 h-40">
+              <div className="absolute inset-0 border-2 border-orange-200 rounded-full animate-ping opacity-20"></div>
+              <div className="absolute inset-4 border-2 border-orange-300 rounded-full animate-spin" style={{ animationDuration: '4s' }}></div>
+              <div className="absolute inset-8 border-2 border-orange-400 rounded-full animate-spin" style={{ animationDuration: '3s', animationDirection: 'reverse' }}></div>
+              <div className="absolute inset-0 flex items-center justify-center"><Brain className="w-8 h-8 text-orange-500" /></div>
+            </div>
           </FadeIn>
         </div>
       </section>
 
       <section className="w-full py-32 px-6 md:px-12 bg-gray-50/50">
         <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-20 items-center">
-          <FadeIn className="fabric-panel simulation-panel p-12 h-96 flex items-center justify-center order-2 md:order-1">
+          <FadeIn className="bg-white rounded-3xl p-12 h-96 flex items-center justify-center border border-gray-100 shadow-sm order-2 md:order-1">
              {/* Minimal graphic representing simulation */}
              <div className="flex flex-col gap-4 w-full max-w-xs">
                <div className="h-4 w-full bg-gray-100 rounded-full overflow-hidden">
@@ -250,7 +242,7 @@ export default function LandingPage() {
       
       <PricingSection />
 
-      {/* Huge CTA Section at the absolute bottom */}
+      {/* CTA Section at the bottom */}
       <section className="w-full py-40 px-6 flex flex-col items-center justify-center text-center bg-gray-50/50 border-t border-gray-100">
         <FadeIn className="flex flex-col items-center max-w-3xl">
           <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-8">
@@ -264,7 +256,7 @@ export default function LandingPage() {
           </p>
           <Link 
             href="/ide"
-            className="stitched-cta group relative px-10 py-5 bg-foreground text-background text-xl font-bold rounded-full transition-all hover:scale-105 flex items-center gap-3 overflow-hidden"
+            className="group relative px-10 py-5 bg-[#111] text-white text-xl font-bold rounded-full hover:bg-black transition-all hover:scale-105 shadow-2xl flex items-center gap-3 overflow-hidden"
           >
             <span className="relative z-10 flex items-center gap-2">
               Enter Workspace 
