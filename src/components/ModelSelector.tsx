@@ -38,7 +38,7 @@ export function ModelSelector({ apiKey, selectedModel, onModelChange, variant = 
       return ['models/gemini-3.5-flash', 'models/gemini-3.6-flash', 'models/gemini-3.7-flash', 'models/gemini-3.8-flash'].includes(id);
     }
     // Free
-    return ['models/gemini-3.5-flash-lite', 'models/gemini-3.5-flash', 'models/gemini-3.6-flash', 'models/gemini-3.7-flash', 'models/gemini-3.8-flash'].includes(id);
+    return ['models/gemini-3.5-flash', 'models/gemini-3.6-flash', 'models/gemini-3.7-flash', 'models/gemini-3.8-flash'].includes(id);
   };
 
   useEffect(() => {
@@ -62,7 +62,6 @@ export function ModelSelector({ apiKey, selectedModel, onModelChange, variant = 
         const allowedIds = [
           'models/gemini-2.5-flash-lite',
           'models/gemini-2.5-flash',
-          'models/gemini-3.5-flash-lite',
           'models/gemini-3.5-flash',
           'models/gemini-3.6-flash',
           'models/gemini-3.7-flash',

@@ -64,6 +64,11 @@ export default function PCBDesignerPage() {
       getApiPool().then(pool => {
         if (pool && pool.length > 0) {
           setApiKeys(pool.map((p: any) => p.key));
+          try {
+            localStorage.setItem('kaktus_api_pool_meta', JSON.stringify(
+              pool.map((p: any) => ({ key: p.key, label: p.label || '' }))
+            ));
+          } catch {}
         } else {
           const stored = localStorage.getItem('gemini_api_keys');
           if (stored) {

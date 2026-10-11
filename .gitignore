@@ -58,3 +58,5 @@ next-env.d.ts
 dist/
 build/
 *.spec
+test 2/
+*.mp4
