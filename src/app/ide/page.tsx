@@ -88,19 +88,6 @@ export default function Home() {
   const [isQuotaModalDismissed, setIsQuotaModalDismissed] = useState(false);
   const syncTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  useEffect(() => {
-    // Revert to old dark UI for this page only
-    document.body.classList.remove('kaktus-theme');
-    document.body.classList.add('dark');
-    const backdrop = document.querySelector('.fabric-backdrop') as HTMLElement;
-    if (backdrop) backdrop.style.display = 'none';
-    
-    return () => {
-      document.body.classList.add('kaktus-theme');
-      document.body.classList.remove('dark');
-      if (backdrop) backdrop.style.display = '';
-    };
-  }, []);
 
   useEffect(() => {
     const updateTokens = () => {

@@ -5,7 +5,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle2, X, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from './AuthProvider';
-import { Button } from '@/components/ui/button';
 
 // Reusing FadeIn for smooth reveals
 function FadeIn({ children, delay = 0, className = "" }: { children: React.ReactNode, delay?: number, className?: string }) {
@@ -47,16 +46,16 @@ export function PricingSection() {
 
     setSelectedPlan({ id: planId, name: planName, price });
     setError('');
-    setSessionId(null); // Reset
+    setSessionId(null);
     
-    // 1. Start prefetching SDK immediately
+    // 1. Prefetch SDK
     import('@cashfreepayments/cashfree-js').then(({ load }) => {
       load({
         mode: process.env.NEXT_PUBLIC_CASHFREE_ENV === 'PRODUCTION' ? 'production' : 'sandbox',
       }).then(cf => setCashfreeInstance(cf));
     });
 
-    // 2. Start prefetching order session immediately
+    // 2. Prefetch order session
     try {
       const response = await fetch('/api/cashfree/create-order', {
         method: 'POST',
@@ -87,7 +86,6 @@ export function PricingSection() {
     setError('');
 
     try {
-      // If prefetch failed or is still loading, fetch again (fallback)
       let currentSessionId = sessionId;
       let cf = cashfreeInstance;
 
@@ -115,7 +113,6 @@ export function PricingSection() {
         });
       }
 
-      // INSTANT CHECKOUT via Modal for better UX
       cf.checkout({
         paymentSessionId: currentSessionId,
         redirectTarget: "_modal",
@@ -123,13 +120,13 @@ export function PricingSection() {
     } catch (err: any) {
       console.error("Checkout error:", err);
       setError(typeof err === 'string' ? err : (err.message || 'Payment initialization failed.'));
-      setSessionId(null); // Clear the expired/failed session so a new one is fetched on retry
+      setSessionId(null);
       setSubmitting(false);
     }
   };
 
   return (
-    <section id="pricing" className="pricing-section w-full py-32 px-6 md:px-12">
+    <section id="pricing" className="w-full py-32 px-6 md:px-12 bg-white border-t border-gray-100">
       <div className="max-w-7xl mx-auto flex flex-col items-center">
         <FadeIn className="text-center mb-20 max-w-3xl">
           <h2 className="text-4xl md:text-6xl font-bold tracking-tight mb-6">Simple, transparent pricing.</h2>
@@ -138,9 +135,9 @@ export function PricingSection() {
           </p>
         </FadeIn>
 
-        <div className="price-grid grid grid-cols-1 md:grid-cols-4 gap-6 w-full max-w-6xl">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 w-full max-w-6xl">
           {/* Free Plan */}
-          <FadeIn delay={0.1} className="price-card fabric-panel flex flex-col p-6 relative">
+          <FadeIn delay={0.1} className="flex flex-col p-8 bg-gray-50 rounded-3xl border border-gray-100 shadow-sm relative">
             <h3 className="text-2xl font-bold mb-2">Free</h3>
             <p className="text-gray-500 mb-6">Perfect for learning and simple circuits.</p>
             <div className="text-5xl font-black mb-8">₹0<span className="text-lg text-gray-400 font-normal">/mo</span></div>
@@ -149,13 +146,16 @@ export function PricingSection() {
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600 font-medium">5 Flash Runs Daily</span></li>
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">Gemini 2.5 Flash / Lite</span></li>
             </ul>
-            <Button variant="outline" onClick={() => handlePlanClick('free', 'Free', '0')} className="w-full py-4 h-auto text-center font-bold">
+            <button 
+              onClick={() => handlePlanClick('free', 'Free', '0')} 
+              className="w-full py-4 text-center rounded-xl bg-gray-200 text-gray-800 font-bold hover:bg-gray-300 transition-colors"
+            >
               Current Plan
-            </Button>
+            </button>
           </FadeIn>
 
           {/* 1 Week Plan */}
-          <FadeIn delay={0.2} className="price-card featured-price fabric-panel flex flex-col p-6 relative z-10">
+          <FadeIn delay={0.2} className="flex flex-col p-8 bg-white rounded-3xl border-2 border-green-500 shadow-xl relative z-10">
             <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-green-500 text-white px-4 py-1 rounded-full text-xs font-bold tracking-wide">POPULAR</div>
             <h3 className="text-2xl font-bold mb-2">Starter</h3>
             <p className="text-gray-500 mb-6">Unlock better reasoning for 1 week.</p>
@@ -166,13 +166,16 @@ export function PricingSection() {
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-blue-600 font-bold">Unlocks 3.5 Flash-Lite</span></li>
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">15x Reasoning Capacity</span></li>
             </ul>
-            <Button onClick={() => handlePlanClick('starter', 'Starter', '29')} className="w-full py-4 h-auto text-center font-bold">
+            <button 
+              onClick={() => handlePlanClick('starter', 'Starter', '29')} 
+              className="w-full py-4 text-center rounded-xl bg-green-500 text-white font-bold hover:bg-green-600 transition-colors shadow-md"
+            >
               Start Trial
-            </Button>
+            </button>
           </FadeIn>
 
           {/* 2 Week Plan */}
-          <FadeIn delay={0.3} className="price-card fabric-panel flex flex-col p-6 relative">
+          <FadeIn delay={0.3} className="flex flex-col p-8 bg-gray-50 rounded-3xl border border-gray-100 shadow-sm relative">
             <h3 className="text-2xl font-bold mb-2">Booster</h3>
             <p className="text-gray-500 mb-6">For your mid-term projects (2 weeks).</p>
             <div className="text-5xl font-black mb-8">₹59<span className="text-lg text-gray-400 font-normal">/14 days</span></div>
@@ -182,13 +185,16 @@ export function PricingSection() {
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-blue-600 font-bold">Unlocks 3.5 & 3.6 Flash</span></li>
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">30x Reasoning Capacity</span></li>
             </ul>
-            <Button variant="secondary" onClick={() => handlePlanClick('booster', 'Booster', '59')} className="dark-patch w-full py-4 h-auto text-center font-bold">
+            <button 
+              onClick={() => handlePlanClick('booster', 'Booster', '59')} 
+              className="w-full py-4 text-center rounded-xl bg-gray-900 text-white font-bold hover:bg-black transition-colors"
+            >
               Upgrade
-            </Button>
+            </button>
           </FadeIn>
 
           {/* 1 Month Plan */}
-          <FadeIn delay={0.4} className="price-card fabric-panel flex flex-col p-6 relative">
+          <FadeIn delay={0.4} className="flex flex-col p-8 bg-gray-50 rounded-3xl border border-gray-100 shadow-sm relative">
             <h3 className="text-2xl font-bold mb-2">Pro</h3>
             <p className="text-gray-500 mb-6">For serious builders and engineers.</p>
             <div className="text-5xl font-black mb-8">₹159<span className="text-lg text-gray-400 font-normal">/month</span></div>
@@ -198,9 +204,12 @@ export function PricingSection() {
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-blue-600 font-bold">Unlocks 3.7 & 3.8 Flash</span></li>
               <li className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" /><span className="text-gray-600">100x Reasoning Capacity</span></li>
             </ul>
-            <Button variant="secondary" onClick={() => handlePlanClick('pro', 'Pro', '159')} className="dark-patch w-full py-4 h-auto text-center font-bold">
+            <button 
+              onClick={() => handlePlanClick('pro', 'Pro', '159')} 
+              className="w-full py-4 text-center rounded-xl bg-gray-900 text-white font-bold hover:bg-black transition-colors"
+            >
               Upgrade
-            </Button>
+            </button>
           </FadeIn>
         </div>
 
@@ -234,7 +243,7 @@ export function PricingSection() {
             />
             <motion.div 
               initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
-              className="relative w-full max-w-md bg-white rounded-3xl p-6 md:p-8 shadow-2xl flex flex-col overflow-hidden fabric-panel"
+              className="relative w-full max-w-md bg-white rounded-3xl p-6 md:p-8 shadow-2xl flex flex-col overflow-hidden"
             >
               <button onClick={() => setSelectedPlan(null)} className="absolute top-4 right-4 text-gray-400 hover:text-black">
                 <X size={24} />
@@ -243,42 +252,40 @@ export function PricingSection() {
               <h2 className="text-2xl font-bold mb-2 text-center text-black">Complete Payment</h2>
               <p className="text-gray-500 text-center mb-6">Plan: {selectedPlan.name} (₹{selectedPlan.price})</p>
 
-                <>
-                  <div className="flex flex-col items-center bg-gray-50 p-6 rounded-2xl border border-gray-100 mb-6">
-                    <p className="text-sm text-gray-500 mb-2 font-medium uppercase tracking-wider">Total Amount</p>
-                    <div className="text-5xl font-black text-black">₹{selectedPlan.price}</div>
-                  </div>
+              <div className="flex flex-col items-center bg-gray-50 p-6 rounded-2xl border border-gray-100 mb-6">
+                <p className="text-sm text-gray-500 mb-2 font-medium uppercase tracking-wider">Total Amount</p>
+                <div className="text-5xl font-black text-black">₹{selectedPlan.price}</div>
+              </div>
 
-                  {!user ? (
-                    <div className="flex flex-col gap-2 mt-2">
-                      <p className="text-sm text-gray-600 text-center mb-2">You must be logged in to proceed with payment.</p>
-                      <button 
-                        onClick={() => router.push('/login?redirect=/#pricing')}
-                        className="w-full bg-gray-900 hover:bg-black text-white font-bold py-3.5 rounded-xl transition-all duration-300 ease-in-out hover:scale-[1.02] active:scale-[0.98] shadow-md flex items-center justify-center"
-                      >
-                        Log In to Continue
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col gap-4 mt-2">
-                      {error && <p className="text-red-600 text-sm text-center bg-red-50 p-3 rounded-lg border border-red-200">{error}</p>}
-                      <button 
-                        onClick={handleCashfreePayment}
-                        disabled={submitting || (!sessionId && !error && !submitting)}
-                        className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl transition-all duration-300 ease-in-out shadow-lg flex items-center justify-center text-lg gap-2"
-                      >
-                        {submitting ? (
-                          <><Loader2 className="w-5 h-5 animate-spin" /> Opening Gateway...</>
-                        ) : (!sessionId && !error) ? (
-                          <><Loader2 className="w-5 h-5 animate-spin" /> Preparing Session...</>
-                        ) : (
-                          'Pay Now with Cashfree'
-                        )}
-                      </button>
-                      <p className="text-xs text-gray-400 text-center mt-1">Payment will securely open in a popup.</p>
-                    </div>
-                  )}
-                </>
+              {!user ? (
+                <div className="flex flex-col gap-2 mt-2">
+                  <p className="text-sm text-gray-600 text-center mb-2">You must be logged in to proceed with payment.</p>
+                  <button 
+                    onClick={() => router.push('/login?redirect=/#pricing')}
+                    className="w-full bg-gray-900 hover:bg-black text-white font-bold py-3.5 rounded-xl transition-all duration-300 ease-in-out hover:scale-[1.02] active:scale-[0.98] shadow-md flex items-center justify-center"
+                  >
+                    Log In to Continue
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-4 mt-2">
+                  {error && <p className="text-red-600 text-sm text-center bg-red-50 p-3 rounded-lg border border-red-200">{error}</p>}
+                  <button 
+                    onClick={handleCashfreePayment}
+                    disabled={submitting || (!sessionId && !error && !submitting)}
+                    className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl transition-all duration-300 ease-in-out shadow-lg flex items-center justify-center text-lg gap-2"
+                  >
+                    {submitting ? (
+                      <><Loader2 className="w-5 h-5 animate-spin" /> Opening Gateway...</>
+                    ) : (!sessionId && !error) ? (
+                      <><Loader2 className="w-5 h-5 animate-spin" /> Preparing Session...</>
+                    ) : (
+                      'Pay Now with Cashfree'
+                    )}
+                  </button>
+                  <p className="text-xs text-gray-400 text-center mt-1">Payment will securely open in a popup.</p>
+                </div>
+              )}
             </motion.div>
           </div>
         )}
