@@ -329,6 +329,11 @@ export default function Home() {
       getApiPool().then(pool => {
         if (pool && pool.length > 0) {
           setApiKeys(pool.map(p => p.key));
+          try {
+            localStorage.setItem('kaktus_api_pool_meta', JSON.stringify(
+              pool.map(p => ({ key: p.key, label: p.label || '' }))
+            ));
+          } catch {}
         } else {
           // Fallback to local storage for backward compatibility
           const stored = localStorage.getItem('gemini_api_keys');
