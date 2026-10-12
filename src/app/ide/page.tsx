@@ -9,16 +9,16 @@ import { ChatBox, ImplementationPlanCard } from '@/components/ChatBox';
 import { ModelSelector } from '@/components/ModelSelector';
 import type { TerminalRef } from '@/components/Terminal';
 import type { TutorialData } from '@/components/CircuitCanvas';
-import { TerminalSquare, X, Layers, Cpu, Cable, Zap, CircuitBoard, Usb, Settings, Upload, Trash2, Circle, LogOut, ShieldAlert, AlertTriangle } from 'lucide-react';
-import { FlashPanel } from '@/components/FlashPanel';
+import { TerminalSquare, X, Layers, Cpu, Cable, Zap, CircuitBoard, Usb, Settings, Upload, Trash2, Circle, LogOut, ShieldAlert, AlertTriangle, Download, AlertCircle } from 'lucide-react';
 import { extractProjectPlanResponse } from '@/lib/agent/protocol';
 import type { PlanBuildAction, ProjectPlan, ResearchSource } from '@/lib/agent/protocol';
-import { insertStepsAfter } from '@/lib/agent/workspace';
+import { buildChatProjectMemory, insertStepsAfter, mergeCircuitSteps } from '@/lib/agent/workspace';
 import { useAuth } from '@/components/AuthProvider';
 import { getApiPool } from '@/lib/admin';
 import { signOut } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { syncToFirebase, loadFromFirebase } from '@/lib/firebase-sync';
+import { getTokenLimit, getStoredTokensUsed, getTimeUntilMidnight, checkAndResetDailyTokens } from '@/lib/tokens';
 import {
   CHAT_SESSION_REGISTRY_KEY,
   chatSessionKey,
@@ -41,6 +41,7 @@ interface WorkspaceTab {
   sources?: ResearchSource[];
   planTargetTabId?: string;
   planApproved?: boolean;
+  mergedFrom?: string[];
 }
 
 interface WorkspaceState {
@@ -66,18 +67,53 @@ function parseWorkspaceSnapshot(value: string | null): WorkspaceState | null {
   }
 }
 
+function mergeWorkspaceTabIntoPrevious(state: WorkspaceState, sourceTabId: string): WorkspaceState {
+  const sourceIndex = state.tabs.findIndex(tab => tab.id === sourceTabId && tab.kind !== 'plan');
+  if (sourceIndex < 0 || sourceTabId === 'main') return state;
+  const sourceTab = state.tabs[sourceIndex];
+  if (!sourceTab.data) return state;
+
+  const previousCircuitTab = state.tabs.slice(0, sourceIndex).reverse().find(tab => tab.kind !== 'plan');
+  const fallbackTab = state.tabs.find(tab => tab.id === 'main' && tab.id !== sourceTabId);
+  const targetTab = previousCircuitTab || fallbackTab;
+  if (!targetTab || targetTab.id === sourceTabId) return state;
+
+  const mergedSteps = mergeCircuitSteps(targetTab.data?.steps || [], sourceTab.data.steps || []);
+  const sourceStepIndex = mergedSteps.sourceStepIndices[sourceTab.currentStep] ?? Math.max(0, mergedSteps.steps.length - 1);
+  const sourceLineage = [...(sourceTab.mergedFrom || []), sourceTab.name];
+  const mergedTab: WorkspaceTab = {
+    ...targetTab,
+    data: {
+      project_name: targetTab.data?.project_name || sourceTab.data.project_name || targetTab.name,
+      description: [targetTab.data?.description, sourceTab.data.description]
+        .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index)
+        .join('\n\n'),
+      blueprint_svg: targetTab.data?.blueprint_svg || sourceTab.data.blueprint_svg,
+      steps: mergedSteps.steps,
+    },
+    currentStep: Math.min(sourceStepIndex, Math.max(0, mergedSteps.steps.length - 1)),
+    mergedFrom: Array.from(new Set([...(targetTab.mergedFrom || []), ...sourceLineage])),
+  };
+  const tabs = state.tabs
+    .filter(tab => tab.id !== sourceTabId)
+    .map(tab => tab.id === targetTab.id ? mergedTab : tab);
+
+  return { ...state, tabs, activeTabId: targetTab.id };
+}
+
 const Terminal = dynamic(() => import('@/components/Terminal').then((mod) => mod.Terminal), { ssr: false });
 const CircuitCanvas = dynamic(() => import('@/components/CircuitCanvas').then((mod) => mod.CircuitCanvas), { ssr: false });
+const FlashPanel = dynamic(() => import('@/components/FlashPanel').then((mod) => mod.FlashPanel), { ssr: false });
+const PdfGenerator = dynamic(() => import('@/components/PdfGenerator').then((mod) => mod.PdfGenerator), { ssr: false });
+const UpgradeModal = dynamic(() => import('@/components/UpgradeModal').then((mod) => mod.UpgradeModal), { ssr: false });
 
 export default function Home() {
   const router = useRouter();
   const { user, loading: authLoading, plan, planExpiresAt } = useAuth();
-  let tokenLimit = 25000; // 25k for free
-  if (plan === 'starter') tokenLimit = 40000;
-  if (plan === 'booster') tokenLimit = 60000;
-  if (plan === 'pro') tokenLimit = 100000;
-  const [apiKeys, setApiKeys] = useState<string[]>([]);
-  const [selectedModel, setSelectedModel] = useState('');
+  const tokenLimit = getTokenLimit(plan, planExpiresAt);
+  const [apiKeys, setApiKeys] = useState<string[]>(['server_managed']);
+  const [selectedModel, setSelectedModel] = useState('models/gemini-2.5-flash-lite');
+  const [availableModels, setAvailableModels] = useState<Array<{ name: string; displayName?: string }>>([]);
   
   const [workspace, setWorkspace] = useState<WorkspaceState>(emptyWorkspace);
   const [workspaceReady, setWorkspaceReady] = useState(false);
@@ -85,45 +121,84 @@ export default function Home() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSaved, setLastSaved] = useState<string>('');
   const [totalTokens, setTotalTokens] = useState(0);
+  const [resetCountdown, setResetCountdown] = useState('12:00 AM');
   const [isQuotaModalDismissed, setIsQuotaModalDismissed] = useState(false);
+  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [isPdfGeneratorOpen, setIsPdfGeneratorOpen] = useState(false);
   const syncTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  const [userRole, setUserRole] = useState<string>('USER');
+
+  useEffect(() => {
+    // Revert to sleek dark workspace UI for IDE page
+    document.body.classList.remove('kaktus-theme');
+    document.body.classList.add('dark');
+    const backdrop = document.querySelector('.fabric-backdrop') as HTMLElement;
+    if (backdrop) backdrop.style.display = 'none';
+    
+    return () => {
+      document.body.classList.add('kaktus-theme');
+      document.body.classList.remove('dark');
+      if (backdrop) backdrop.style.display = '';
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.push('/');
+    } else if (user) {
+      const email = (user.email || '').toLowerCase().trim();
+      const isSuperAdmin = email === 'mahesh.gupta8952@gmail.com' || email === 'dixitshubham68359@gmail.com';
+      if (isSuperAdmin) {
+        setUserRole('SUPER_ADMIN');
+      }
+      user.getIdTokenResult(true).then(result => {
+        if (result.claims?.role) {
+          setUserRole(result.claims.role as string);
+        } else if (isSuperAdmin) {
+          setUserRole('SUPER_ADMIN');
+        }
+      }).catch(console.error);
+    }
+  }, [user, authLoading, router]);
+
+  // Reset modal dismissal when day rolls over and tokens drop below limit
+  useEffect(() => {
+    if (totalTokens < tokenLimit && isQuotaModalDismissed) {
+      setIsQuotaModalDismissed(false);
+    }
+  }, [totalTokens, tokenLimit, isQuotaModalDismissed]);
 
   useEffect(() => {
     const updateTokens = () => {
       try {
-        const uid = localStorage.getItem('kaktus_user_uid');
-        if (!uid) return;
-        const usageRaw = localStorage.getItem(`gemini_key_usage_stats_${uid}`);
-        if (usageRaw) {
-          const usage = JSON.parse(usageRaw);
-          let totalStoredTokens = 0;
-          const today = new Date().toISOString().split('T')[0];
-          if (usage[today]) {
-            for (const key in usage[today]) {
-              for (const model in usage[today][key]) {
-                totalStoredTokens += usage[today][key][model];
-              }
-            }
-          }
-          // Now usage reflects exact token count returned by Gemini API
-          setTotalTokens(totalStoredTokens);
-        } else {
-          setTotalTokens(0);
-        }
+        const uid = user?.uid || (typeof window !== 'undefined' ? (localStorage.getItem('kaktus_user_uid') || localStorage.getItem('kaktus_user_email')) : null);
+        const { formatted } = getTimeUntilMidnight();
+        setResetCountdown(formatted);
+
+        checkAndResetDailyTokens(uid);
+        const total = getStoredTokensUsed(uid);
+        setTotalTokens(total);
       } catch (e) {
         console.error(e);
       }
     };
     updateTokens();
-    const interval = setInterval(updateTokens, 5000);
-    window.addEventListener('geminiUsageUpdated', updateTokens);
+    const interval = setInterval(updateTokens, 1000);
+    const onUsageUpdated = () => updateTokens();
+    const onQuotaExceeded = () => {
+      updateTokens();
+      setIsUpgradeModalOpen(true);
+    };
+    window.addEventListener('geminiUsageUpdated', onUsageUpdated);
+    window.addEventListener('geminiQuotaExceeded', onQuotaExceeded);
     
     return () => {
       clearInterval(interval);
-      window.removeEventListener('geminiUsageUpdated', updateTokens);
+      window.removeEventListener('geminiUsageUpdated', onUsageUpdated);
+      window.removeEventListener('geminiQuotaExceeded', onQuotaExceeded);
     };
-  }, []);
+  }, [user?.uid]);
 
   // Auto-save to Firebase with debounce (3 seconds after last change)
   const triggerAutoSave = useCallback(() => {
@@ -312,22 +387,36 @@ export default function Home() {
   }, []);
   
     useEffect(() => {
-      // First try to get Admin API Pool (App Global Keys)
-      getApiPool().then(pool => {
-        if (pool && pool.length > 0) {
-          setApiKeys(pool.map(p => p.key));
-        } else {
-          // Fallback to local storage for backward compatibility
-          const stored = localStorage.getItem('gemini_api_keys');
-          if (stored) {
-            try {
-              setApiKeys(JSON.parse(stored));
-            } catch(e) {}
-          } else {
-            const oldKey = localStorage.getItem('gemini_api_key');
-            if (oldKey) setApiKeys([oldKey]);
+      const localKeys: string[] = [];
+      try {
+        const stored = localStorage.getItem('gemini_api_keys');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((k: string) => {
+              if (typeof k === 'string' && k.trim() && !localKeys.includes(k.trim())) localKeys.push(k.trim());
+            });
           }
         }
+        const oldKey = localStorage.getItem('gemini_api_key');
+        if (oldKey && typeof oldKey === 'string' && oldKey.trim() && !localKeys.includes(oldKey.trim())) {
+          localKeys.push(oldKey.trim());
+        }
+      } catch {}
+
+      getApiPool().then(pool => {
+        if (pool && pool.length > 0) {
+          try {
+            localStorage.setItem('kaktus_api_pool_meta', JSON.stringify(
+              pool.map(p => ({ key: p.key, label: p.label || '' }))
+            ));
+          } catch {}
+        }
+        const poolKeys = (pool && pool.length > 0) ? pool.map(p => p.key) : ['server_managed'];
+        const merged = Array.from(new Set([...localKeys, ...poolKeys])).filter(Boolean);
+        setApiKeys(merged.length > 0 ? merged : ['server_managed']);
+      }).catch(() => {
+        setApiKeys(localKeys.length > 0 ? localKeys : ['server_managed']);
       });
     }, []);
   
@@ -347,27 +436,7 @@ export default function Home() {
       
       // MERGE TAB logic: Git-style merge (replace main with branch)
       if (action === 'MERGE_TAB') {
-        const mainIndex = tabs.findIndex(t => t.id === 'main');
-        const activeIndex = tabs.findIndex(t => t.id === activeTabId);
-        
-        if (mainIndex >= 0 && activeIndex >= 0 && activeTabId !== 'main') {
-          const mainTab = tabs[mainIndex];
-          const activeTab = tabs[activeIndex];
-          
-          if (activeTab.data) {
-            // REPLACE main tab data with the active tab's data entirely
-            const updatedMainData = JSON.parse(JSON.stringify(activeTab.data));
-            const newTabs = tabs.filter(t => t.id !== activeTabId);
-            const mainIdxInNew = newTabs.findIndex(t => t.id === 'main');
-            if (mainIdxInNew >= 0) {
-              newTabs[mainIdxInNew].data = updatedMainData;
-              newTabs[mainIdxInNew].currentStep = activeTab.currentStep;
-            }
-            
-            return { tabs: newTabs, activeTabId: 'main' };
-          }
-        }
-        return prev; // Nothing to merge if we are on main
+        return mergeWorkspaceTabIntoPrevious(prev, activeTabId);
       }
       
       // NEW_TAB logic: Create fresh independent tab for a sub-system
@@ -496,39 +565,64 @@ export default function Home() {
 
   // Compute all tabs summary with FULL component/wire detail for AI context
   const allTabs = workspace.tabs.filter(t => t.kind !== 'plan').map(t => {
-    const components: Array<{ id: string; type: string; x?: number; y?: number }> = [];
-    const wires: Array<{ from: string; to: string; color?: string }> = [];
-    const pinLinks = new Map<string, Set<string>>();
-    if (t.data?.steps) {
-      t.data.steps.forEach((s: any) => {
-        (s.add_components || []).forEach((c: any) => {
-          if (!components.find(ex => ex.id === c.id)) {
-            components.push({ id: c.id, type: c.type, x: c.x, y: c.y });
-          }
-        });
-        (s.add_wiring || []).forEach((w: any) => {
-          wires.push({ from: w.from, to: w.to, color: w.color });
-          for (const [endpoint, peer] of [[w.from, w.to], [w.to, w.from]]) {
-            if (typeof endpoint !== 'string' || typeof peer !== 'string' || !endpoint.includes(':')) continue;
-            const links = pinLinks.get(endpoint) || new Set<string>();
-            links.add(peer);
-            pinLinks.set(endpoint, links);
-          }
-        });
-      });
+    const componentMap = new Map<string, { id: string; type: string; x?: number; y?: number }>();
+    const wireMap = new Map<string, { from: string; to: string; color?: string; net?: string; stepIndex: number }>();
+    const wireKey = (from: string, to: string) => [from.toLowerCase(), to.toLowerCase()].sort().join('|');
+    for (const [stepIndex, step] of (t.data?.steps || []).entries()) {
+      for (const id of step.remove_components || []) {
+        componentMap.delete(id);
+        for (const [key, wire] of wireMap) {
+          if (wire.from.startsWith(`${id}:`) || wire.to.startsWith(`${id}:`)) wireMap.delete(key);
+        }
+      }
+      for (const removal of step.remove_wiring || []) {
+        for (const [key, wire] of wireMap) {
+          const remove = typeof removal === 'string'
+            ? wire.from === removal || wire.to === removal
+            : wireKey(wire.from, wire.to) === wireKey(removal.from, removal.to);
+          if (remove) wireMap.delete(key);
+        }
+      }
+      for (const component of step.add_components || []) {
+        componentMap.set(component.id, { id: component.id, type: component.type, x: component.x, y: component.y });
+      }
+      for (const wire of step.add_wiring || []) {
+        wireMap.set(wireKey(wire.from, wire.to), { from: wire.from, to: wire.to, color: wire.color, net: wire.net, stepIndex });
+      }
     }
+    const components = Array.from(componentMap.values());
+    const wires = Array.from(wireMap.values());
+    const pinLinks = new Map<string, Set<string>>();
+    wires.forEach(wire => {
+      for (const [endpoint, peer] of [[wire.from, wire.to], [wire.to, wire.from]]) {
+        if (typeof endpoint !== 'string' || typeof peer !== 'string' || !endpoint.includes(':')) continue;
+        const links = pinLinks.get(endpoint) || new Set<string>();
+        links.add(peer);
+        pinLinks.set(endpoint, links);
+      }
+    });
     return {
       name: t.name,
       isActive: t.id === activeCircuitTab.id,
+      mergedFrom: t.mergedFrom || [],
       componentCount: components.length,
       wireCount: wires.length,
       stepCount: t.data?.steps?.length || 0,
       components,
       wires,
       pinAssignments: Array.from(pinLinks, ([pin, peers]) => `${pin} -> ${Array.from(peers).join(', ')}`),
-      stepOutline: t.data?.steps?.map((step: any) => `${step.phase || 'Build'}: ${step.instruction}`).slice(0, 100) || []
+      stepOutline: (() => {
+        const outline = t.data?.steps?.map((step: any) => `${step.phase || 'Build'}: ${step.instruction}`) || [];
+        const recentOutline = outline.length > 10
+          ? [outline[0], `${outline.length - 9} earlier steps summarized`, ...outline.slice(-8)]
+          : outline;
+        return recentOutline.map((step: string) => step.length > 180 ? `${step.slice(0, 179).trimEnd()}…` : step);
+      })()
     };
   });
+  const projectMemory = buildChatProjectMemory(allTabs);
+
+  if (!authLoading && !user) return null;
 
   return (
     <div className="min-h-screen h-screen bg-[#0a0a0a] text-gray-100 flex flex-col font-sans overflow-hidden dark-ui">
@@ -536,7 +630,7 @@ export default function Home() {
         <div className="bg-orange-500/10 text-orange-400 border-b border-orange-500/20 px-4 py-1.5 text-[12px] flex items-center justify-center gap-2 flex-shrink-0">
           <AlertTriangle size={14} />
           Your {plan.toUpperCase()} plan is ending soon. Renew to continue benefits.
-          <Link href="/#pricing" className="underline font-medium hover:text-orange-300 ml-2">Renew now</Link>
+          <button onClick={() => setIsUpgradeModalOpen(true)} className="underline font-medium hover:text-orange-300 ml-2 cursor-pointer bg-transparent border-none p-0 text-[12px]">Renew now</button>
         </div>
       )}
       {/* Top Navbar */}
@@ -563,16 +657,7 @@ export default function Home() {
             <button className="px-3 h-full flex items-center hover:bg-[#333333] rounded-md transition-colors">
               File
             </button>
-            {user && (
-              <button 
-                onClick={() => { router.push('/'); setTimeout(() => signOut(auth), 100); }}
-                className="px-2 h-full flex items-center hover:bg-red-950/40 text-gray-400 hover:text-red-400 rounded-md transition-colors gap-1 text-[12px]"
-                title="Log out"
-              >
-                <LogOut size={12} />
-                <span>Logout</span>
-              </button>
-            )}
+
             <button 
               onClick={() => setIsTerminalOpen(!isTerminalOpen)}
               className={`px-3 h-full flex items-center hover:bg-[#333333] rounded-md transition-colors ${isTerminalOpen ? 'bg-[#333333] text-white' : ''}`}
@@ -586,6 +671,14 @@ export default function Home() {
             >
               <Usb size={13} />
               Connect
+            </button>
+            <button 
+              onClick={() => setIsPdfGeneratorOpen(true)}
+              className="px-3 h-full flex items-center hover:bg-[#333333] rounded-md transition-colors gap-1.5 text-blue-400 hover:text-blue-300"
+              title="Export as PDF"
+            >
+              <Download size={13} />
+              Export PDF
             </button>
           </nav>
         </div>
@@ -609,15 +702,47 @@ export default function Home() {
           {user && (
             <>
               {/* Token Usage Bar */}
-              <div className="flex items-center gap-3 mr-2 bg-[#1a1a1a] px-3 py-1.5 rounded-md border border-[#333]">
+              <div 
+                onClick={() => { if (totalTokens >= tokenLimit) setIsUpgradeModalOpen(true); }}
+                className={`flex items-center gap-3 mr-2 px-3 py-1.5 rounded-md border transition-all ${
+                  totalTokens >= tokenLimit
+                    ? 'bg-red-950/50 border-red-500/60 shadow-[0_0_15px_rgba(239,68,68,0.35)] cursor-pointer'
+                    : totalTokens / tokenLimit >= 0.8
+                      ? 'bg-amber-950/30 border-amber-500/40'
+                      : 'bg-[#1a1a1a] border-[#333]'
+                }`}
+                title={totalTokens >= tokenLimit ? 'Daily token limit exceeded. Click to upgrade plan.' : `${(totalTokens).toLocaleString()} / ${tokenLimit.toLocaleString()} tokens used today`}
+              >
                 <div className="flex flex-col items-end w-28">
                   <div className="flex justify-between w-full mb-1">
-                    <span className="text-[9px] text-gray-400 font-semibold uppercase tracking-wider">{plan === 'free' ? 'Free Trial' : 'Pro Plan'}</span>
-                    <span className="text-[9px] text-blue-400 font-medium">{(totalTokens / 1000).toFixed(1)}k / {tokenLimit / 1000}k</span>
+                    <span className={`text-[9px] font-semibold uppercase tracking-wider ${
+                      totalTokens >= tokenLimit
+                        ? 'text-red-400 font-bold'
+                        : totalTokens / tokenLimit >= 0.8
+                          ? 'text-amber-400'
+                          : 'text-gray-400'
+                    }`}>
+                      {totalTokens >= tokenLimit ? 'Exceeded' : (plan === 'free' ? 'Free Plan' : `${plan.toUpperCase()}`)}
+                    </span>
+                    <span className={`text-[9px] font-medium ${
+                      totalTokens >= tokenLimit
+                        ? 'text-red-400 font-bold'
+                        : totalTokens / tokenLimit >= 0.8
+                          ? 'text-amber-400'
+                          : 'text-blue-400'
+                    }`}>
+                      {(totalTokens / 1000).toFixed(1)}k / {tokenLimit / 1000}k
+                    </span>
                   </div>
                   <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
                     <div 
-                      className="h-full bg-gradient-to-r from-blue-600 to-blue-400 rounded-full transition-all duration-500" 
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        totalTokens >= tokenLimit
+                          ? 'bg-gradient-to-r from-red-600 to-red-500'
+                          : totalTokens / tokenLimit >= 0.8
+                            ? 'bg-gradient-to-r from-amber-500 to-amber-400'
+                            : 'bg-gradient-to-r from-blue-600 to-blue-400'
+                      }`} 
                       style={{ width: `${Math.min(100, (totalTokens / tokenLimit) * 100)}%` }}
                     />
                   </div>
@@ -626,22 +751,38 @@ export default function Home() {
 
               <div className="w-px h-4 bg-gray-700 mx-1"></div>
               
-              <div className="flex items-center gap-2 group relative">
+              {(userRole === 'ADMIN' || userRole === 'SUPER_ADMIN') && (
+                <Link href="/admin" className="flex items-center gap-1.5 group cursor-pointer bg-purple-950/40 border border-purple-500/30 hover:bg-purple-900/40 px-2.5 py-1 rounded-md transition-colors" title="Admin Panel">
+                  <div className="w-4 h-4 rounded-full bg-purple-600 flex items-center justify-center text-white text-[9px] font-bold shadow-sm">
+                    A
+                  </div>
+                  <span className="text-[11px] text-purple-300 group-hover:text-white transition-colors font-semibold hidden md:block">
+                    Admin Panel
+                  </span>
+                </Link>
+              )}
+
+              <Link href="/profile" className="flex items-center gap-2 group cursor-pointer hover:bg-[#333333] p-1.5 rounded-md transition-colors" title="My Account (User Profile)">
                 <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-[11px] font-bold shadow-sm">
                   {(user.displayName || user.email || "U")[0].toUpperCase()}
                 </div>
-                <div className="flex flex-col">
-                  <span className="text-[11px] text-gray-200 font-medium hidden md:block max-w-[120px] truncate">
-                    {user.email}
+                <div className="flex flex-col text-left hidden md:block">
+                  <span className="text-[11px] text-gray-200 group-hover:text-white transition-colors font-medium max-w-[120px] truncate block leading-tight">
+                    {user.displayName || user.email?.split('@')[0] || "User"}
                   </span>
-                  <span 
-                    onClick={() => { router.push('/'); setTimeout(() => signOut(auth), 100); }}
-                    className="text-[9px] text-gray-500 hover:text-red-400 transition-colors uppercase tracking-widest hidden md:block cursor-pointer font-semibold"
-                  >
-                    Logout
+                  <span className="text-[9px] text-gray-400 group-hover:text-blue-300 uppercase tracking-wider block leading-tight">
+                    My Account
                   </span>
                 </div>
-              </div>
+              </Link>
+
+              <button 
+                onClick={() => { router.push('/'); setTimeout(() => signOut(auth), 100); }}
+                className="text-[10px] text-gray-400 hover:text-red-400 transition-colors uppercase tracking-widest font-semibold px-1.5 hidden md:block cursor-pointer"
+                title="Logout"
+              >
+                Logout
+              </button>
               <div className="w-px h-4 bg-gray-700 mx-1"></div>
             </>
           )}
@@ -672,6 +813,8 @@ export default function Home() {
               key={sessionId}
               apiKeys={apiKeys} 
               model={selectedModel}
+              availableModels={availableModels}
+              onModelChange={setSelectedModel}
               onExecuteCommand={handleExecuteCommand}
               onUpdateCircuit={handleCircuitUpdate}
               onStepChange={handleStepChange}
@@ -679,6 +822,7 @@ export default function Home() {
               totalSteps={circuitData?.steps?.length || 0}
               circuitData={circuitData}
               allTabs={allTabs}
+              projectMemory={projectMemory}
               activeTabId={activeCircuitTab.id}
               targetWorkspaceTabId={activeTab.kind === 'plan' ? activeTab.planTargetTabId || 'main' : activeTab.id}
               sessionId={sessionId}
@@ -691,8 +835,12 @@ export default function Home() {
               onOpenImplementationPlan={handleOpenImplementationPlan}
               pendingPlanAction={pendingPlanAction}
               onPlanActionConsumed={handlePlanActionConsumed}
-              onQuotaReached={() => setIsQuotaModalDismissed(false)}
-              modelSelectorNode={<ModelSelector apiKey={apiKeys[0] || ''} selectedModel={selectedModel} onModelChange={setSelectedModel} variant="minimal" />}
+              onQuotaReached={() => {
+                setIsQuotaModalDismissed(false);
+                setIsUpgradeModalOpen(true);
+              }}
+              isQuotaReached={totalTokens >= tokenLimit}
+              modelSelectorNode={<ModelSelector apiKey={apiKeys[0] || ''} selectedModel={selectedModel} onModelChange={setSelectedModel} onAvailableModelsChange={setAvailableModels} onUpgradeClick={() => setIsUpgradeModalOpen(true)} variant="minimal" />}
             />}
           </div>
         </div>
@@ -715,29 +863,13 @@ export default function Home() {
                 >
                   {tab.name}
                   
-                  {/* Merge Button */}
+                  {/* Merge the branch into the previous circuit tab while preserving both histories. */}
                   {workspace.activeTabId === tab.id && tab.id !== 'main' && tab.kind !== 'plan' && tab.data && (
                     <button 
-                      title="Merge to Main"
+                      title="Merge into the previous circuit tab"
                       onClick={(e) => {
                         e.stopPropagation();
-                        setWorkspace(prev => {
-                          const mainIndex = prev.tabs.findIndex(t => t.id === 'main');
-                          const activeTab = prev.tabs.find(t => t.id === tab.id);
-                          if (mainIndex >= 0 && activeTab?.data) {
-                            const newTabs = prev.tabs.filter(t => t.id !== tab.id);
-                            const mainIdxInNew = newTabs.findIndex(t => t.id === 'main');
-                            if (mainIdxInNew >= 0) {
-                              newTabs[mainIdxInNew] = {
-                                ...newTabs[mainIdxInNew],
-                                data: JSON.parse(JSON.stringify(activeTab.data)),
-                                currentStep: activeTab.currentStep
-                              };
-                            }
-                            return { tabs: newTabs, activeTabId: 'main' };
-                          }
-                          return prev;
-                        });
+                        setWorkspace(prev => mergeWorkspaceTabIntoPrevious(prev, tab.id));
                       }}
                       className="ml-2 text-gray-400 hover:text-gray-200 bg-gray-800 hover:bg-gray-700 rounded px-1.5 py-0.5 text-[10px] transition-colors"
                     >
@@ -798,6 +930,9 @@ export default function Home() {
     data={circuitData}
     currentStep={currentStep}
     allTabs={allTabs}
+    projectMemory={projectMemory}
+    sessionId={sessionId}
+    workspaceTabId={activeTab.id}
     onStepChange={handleStepChange}
     apiKeys={apiKeys}
     model={selectedModel}
@@ -861,57 +996,87 @@ export default function Home() {
           )}
         </AnimatePresence>
 
-        {/* Token Limit Modal */}
-        <AnimatePresence>
-          {totalTokens >= tokenLimit && !isQuotaModalDismissed && (
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[9999] flex items-center justify-center bg-[#111111]/80 backdrop-blur-sm"
-            >
-              <motion.div 
-                initial={{ scale: 0.95, opacity: 0, y: 10 }}
-                animate={{ scale: 1, opacity: 1, y: 0 }}
-                className="relative bg-[#1c1c1c] rounded-2xl p-8 max-w-md w-full shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col items-center text-center"
-              >
-                {/* Modal Stitching */}
-                <div className="absolute inset-2 rounded-xl border border-dashed border-gray-700/60 pointer-events-none" />
-                
-                <button
-                  onClick={() => setIsQuotaModalDismissed(true)}
-                  className="absolute top-5 right-5 text-gray-600 hover:text-gray-400 transition-colors z-10"
-                >
-                  <X size={16} strokeWidth={2.5} />
-                </button>
-                
-                <div className="relative w-16 h-16 bg-[#111] shadow-[inset_0_2px_10px_rgba(0,0,0,0.5)] rounded-full flex items-center justify-center mb-5 mt-2">
-                  {/* Icon Stitching */}
-                  <div className="absolute inset-1.5 rounded-full border border-dashed border-red-900/40 pointer-events-none" />
-                  <ShieldAlert className="w-6 h-6 text-red-500/90 z-10" strokeWidth={1.5} />
+        {/* In-IDE Upgrade & Payment Modal */}
+        <UpgradeModal
+          isOpen={isUpgradeModalOpen || (totalTokens >= tokenLimit && !isQuotaModalDismissed)}
+          onClose={() => {
+            setIsUpgradeModalOpen(false);
+            setIsQuotaModalDismissed(true);
+          }}
+          reason={totalTokens >= tokenLimit ? `You have exceeded your ${tokenLimit / 1000}k tokens limit. Upgrade to continue building and simulating.` : undefined}
+        />
+
+        <PdfGenerator
+          isOpen={isPdfGeneratorOpen}
+          onClose={() => setIsPdfGeneratorOpen(false)}
+          circuitData={circuitData}
+          sessionTitle={sessions.find(session => session.id === sessionId)?.title || 'New Project'}
+          tabName={activeTab.name}
+          sessionId={sessionId}
+          workspaceTabId={activeTab.id}
+        />
+
+        {/* Floating Corner Notification Widget */}
+        <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-2 pointer-events-auto select-none">
+          {totalTokens >= tokenLimit ? (
+            <div className="bg-[#18181b]/95 border border-red-500/60 shadow-[0_10px_35px_rgba(239,68,68,0.35)] rounded-2xl p-3.5 max-w-sm backdrop-blur-md text-white animate-in fade-in slide-in-from-bottom-3 duration-300">
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-xl bg-red-500/20 border border-red-500/40 flex items-center justify-center flex-shrink-0 text-red-400">
+                  <AlertCircle size={18} className="animate-pulse" />
                 </div>
-                
-                <h2 className="text-[22px] font-semibold text-[#f5f4e6] mb-3 tracking-wide">Daily Quota Reached</h2>
-                <p className="text-[#9ca3af] mb-8 text-[15px] leading-relaxed px-2">
-                  You have exceeded your {tokenLimit / 1000}k tokens limit for today.<br/>
-                  Please upgrade your plan to continue chatting,<br/> building, and simulating.
-                </p>
-                
-                <button
-                  onClick={() => router.push('/#pricing')}
-                  className="relative w-full py-3.5 px-4 bg-[#2b64d2] hover:bg-[#2353b3] text-white rounded-xl font-medium transition-all shadow-[0_4px_14px_0_rgba(43,100,210,0.39)] flex items-center justify-center gap-2 group overflow-hidden"
-                >
-                  {/* Button Stitching */}
-                  <div className="absolute inset-[3px] rounded-lg border border-dashed border-white/20 pointer-events-none transition-colors group-hover:border-white/30" />
-                  <span className="z-10 flex items-center gap-2 tracking-wide text-[15px]">
-                    Upgrade Plan to Continue
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="transition-transform group-hover:translate-x-1"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-                  </span>
-                </button>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-xs tracking-wide text-red-300 uppercase">Quota Exceeded</span>
+                    <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded bg-red-950/90 text-red-300 border border-red-800/60">
+                      Resets in {resetCountdown} (12:00 AM)
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-gray-300 mt-1 leading-snug">
+                    Used <span className="font-bold text-white">{totalTokens.toLocaleString()}</span> / {tokenLimit.toLocaleString()} tokens for your {plan.toUpperCase()} plan.
+                  </p>
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setIsQuotaModalDismissed(false);
+                        setIsUpgradeModalOpen(true);
+                      }}
+                      className="w-full bg-gradient-to-r from-red-600 to-amber-600 hover:from-red-500 hover:to-amber-500 text-white font-bold text-xs py-1.5 px-3 rounded-lg shadow-md flex items-center justify-center gap-1.5 transition-transform active:scale-95 cursor-pointer"
+                    >
+                      <Zap size={13} className="fill-white" />
+                      Upgrade Plan (₹39 - ₹169)
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : plan !== 'free' && planExpiresAt ? (
+            <div className="bg-[#18181b]/90 border border-amber-500/40 shadow-lg rounded-2xl px-3.5 py-2 backdrop-blur-md text-white flex items-center gap-3">
+              <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
+              <div className="text-[11px]">
+                <span className="font-bold text-amber-300 uppercase tracking-wider">{plan} Pack</span>
+                <span className="text-gray-400 mx-1.5">•</span>
+                <span className="text-gray-300 font-mono">
+                  {(() => {
+                    const ms = Math.max(0, new Date(planExpiresAt).getTime() - Date.now());
+                    const d = Math.floor(ms / (24 * 3600 * 1000));
+                    const h = Math.floor((ms % (24 * 3600 * 1000)) / (3600 * 1000));
+                    const m = Math.floor((ms % (3600 * 1000)) / 60000);
+                    return d > 0 ? `${d}d ${h}h left` : (h > 0 ? `${h}h ${m}m left` : `${m}m left`);
+                  })()}
+                </span>
+              </div>
+              <button
+                onClick={() => {
+                  setIsQuotaModalDismissed(false);
+                  setIsUpgradeModalOpen(true);
+                }}
+                className="text-[10px] font-bold uppercase tracking-wider text-amber-400 hover:text-amber-300 underline cursor-pointer"
+              >
+                Upgrade
+              </button>
+            </div>
+          ) : null}
+        </div>
 
       </main>
     </div>

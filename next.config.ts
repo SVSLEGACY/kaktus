@@ -26,6 +26,9 @@ const nextConfig: NextConfig = {
       '@firebase/firestore': isServer
         ? path.resolve(process.cwd(), 'node_modules/@firebase/firestore/dist/index.node.cjs.js')
         : path.resolve(process.cwd(), 'node_modules/@firebase/firestore/dist/index.esm.js'),
+      'jspdf': path.resolve(process.cwd(), 'node_modules/jspdf/dist/jspdf.es.min.js'),
+      'canvg': false,
+      'core-js': false,
     };
     return config;
   },
