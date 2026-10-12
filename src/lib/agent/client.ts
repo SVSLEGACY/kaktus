@@ -85,7 +85,7 @@ function isKeyRecentlyExhausted(key: string, model: string): boolean {
 }
 
 export async function requestAgent(request: AgentRequest): Promise<AgentResponse> {
-  // Check token limits before making the request
+  // Check token limits before making the request (TODAY only)
   if (typeof window !== 'undefined') {
     const uid = localStorage.getItem('kaktus_user_uid') || localStorage.getItem('kaktus_user_email');
     const plan = (localStorage.getItem('kaktus_user_plan') || 'free').toLowerCase();

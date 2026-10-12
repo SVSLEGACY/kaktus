@@ -30,7 +30,7 @@ export const UPGRADE_PLANS: PlanInfo[] = [
     badge: 'POPULAR',
     description: '1-Week reasoning boost',
     features: [
-      '50k Daily Tokens Quota',
+      '165k Daily Tokens Quota',
       'Unlocks Gemini 3.5 Flash',
       'Fast Processing Speed',
       '1 Week Full Access',
@@ -43,7 +43,7 @@ export const UPGRADE_PLANS: PlanInfo[] = [
     badge: 'RECOMMENDED',
     description: 'For mid-size circuit assemblies (2 weeks)',
     features: [
-      '75k Daily Tokens Quota',
+      '255k Daily Tokens Quota',
       'Unlocks Gemini 3.5 & 3.6 Flash',
       'Priority Queue Execution',
       '2 Weeks Full Access',
@@ -56,7 +56,7 @@ export const UPGRADE_PLANS: PlanInfo[] = [
     badge: 'MAX POWER',
     description: 'Full unconstrained reasoning (1 month)',
     features: [
-      '100k Daily Tokens Quota',
+      '335k Daily Tokens Quota',
       'Unlocks Gemini 3.7 & 3.8 Flash',
       'Maximum Reasoning Depth',
       '1 Month Full Access',

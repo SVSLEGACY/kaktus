@@ -104,7 +104,7 @@ export function PricingSection() {
             <p className="text-muted-foreground mb-4 text-sm">Perfect for learning and simple circuits.</p>
             <div className="text-4xl md:text-5xl font-black mb-6">₹0<span className="text-base text-muted-foreground font-normal">/mo</span></div>
             <ul className="flex flex-col gap-3.5 mb-8 flex-grow text-sm">
-              <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="font-bold">25k Daily Tokens</span></li>
+              <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="font-bold">75k Daily Tokens</span></li>
               <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="text-muted-foreground">Standard Speed</span></li>
               <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="text-muted-foreground">Gemini 2.5 Flash & Lite</span></li>
             </ul>
@@ -124,7 +124,7 @@ export function PricingSection() {
             <p className="text-muted-foreground mb-4 text-sm">Unlock better reasoning (1 week).</p>
             <div className="text-4xl md:text-5xl font-black mb-6">₹39<span className="text-base text-muted-foreground font-normal">/1 week</span></div>
             <ul className="flex flex-col gap-3.5 mb-8 flex-grow text-sm">
-              <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="font-bold">50k Daily Tokens Quota</span></li>
+              <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="font-bold">165k Daily Tokens Quota</span></li>
               <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="font-medium">Fast Processing Speed</span></li>
               <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="font-bold">Unlocks Gemini 3.5 Flash</span></li>
               <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="text-muted-foreground">7 Days Full Access</span></li>
@@ -148,7 +148,7 @@ export function PricingSection() {
             <p className="text-muted-foreground mb-4 text-sm">For mid-term projects (2 weeks).</p>
             <div className="text-4xl md:text-5xl font-black mb-6">₹69<span className="text-base text-muted-foreground font-normal">/2 weeks</span></div>
             <ul className="flex flex-col gap-3.5 mb-8 flex-grow text-sm">
-              <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="font-bold">75k Daily Tokens Quota</span></li>
+              <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="font-bold">255k Daily Tokens Quota</span></li>
               <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="font-medium">Priority Speed</span></li>
               <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="font-bold">Unlocks 3.5 & 3.6 Flash</span></li>
               <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="text-muted-foreground">14 Days Full Access</span></li>
@@ -172,7 +172,7 @@ export function PricingSection() {
             <p className="text-muted-foreground mb-4 text-sm">For serious builders (1 month).</p>
             <div className="text-4xl md:text-5xl font-black mb-6">₹169<span className="text-base text-muted-foreground font-normal">/1 month</span></div>
             <ul className="flex flex-col gap-3.5 mb-8 flex-grow text-sm">
-              <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="font-bold">100k Daily Tokens Quota</span></li>
+              <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="font-bold">335k Daily Tokens Quota</span></li>
               <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="font-medium">Max Processing Speed</span></li>
               <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="font-bold">Unlocks 3.7 & 3.8 Flash</span></li>
               <li className="flex items-center gap-2.5"><CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" /><span className="text-muted-foreground">30 Days Full Access</span></li>

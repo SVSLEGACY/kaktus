@@ -43,15 +43,15 @@ describe('Token Limits & Usage Blocking Logic', () => {
   });
 
   it('correctly resolves token limits for each plan tier', () => {
-    expect(getTokenLimit('free')).toBe(25_000);
-    expect(getTokenLimit('starter')).toBe(50_000);
-    expect(getTokenLimit('booster')).toBe(75_000);
-    expect(getTokenLimit('pro')).toBe(100_000);
-    expect(getTokenLimit(null)).toBe(25_000);
-    expect(getTokenLimit('unknown')).toBe(25_000);
+    expect(getTokenLimit('free')).toBe(75_000);
+    expect(getTokenLimit('starter')).toBe(165_000);
+    expect(getTokenLimit('booster')).toBe(255_000);
+    expect(getTokenLimit('pro')).toBe(335_000);
+    expect(getTokenLimit(null)).toBe(75_000);
+    expect(getTokenLimit('unknown')).toBe(75_000);
   });
 
-  it('reverts to free plan limit (25k) once planExpiresAt has passed', () => {
+  it('reverts to free plan limit (75k) once planExpiresAt has passed', () => {
     const expiredDate = new Date(Date.now() - 60_000); // Expired 1 minute ago
     const futureDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 1 week in future
 
@@ -60,16 +60,16 @@ describe('Token Limits & Usage Blocking Logic', () => {
 
     // Expired starter plan reverts to free limit
     expect(getEffectiveUserPlan('starter', expiredDate)).toBe('free');
-    expect(getTokenLimit('starter', expiredDate)).toBe(25_000);
+    expect(getTokenLimit('starter', expiredDate)).toBe(75_000);
 
-    // Active starter plan retains 50k limit
+    // Active starter plan retains 165k limit
     expect(getEffectiveUserPlan('starter', futureDate)).toBe('starter');
-    expect(getTokenLimit('starter', futureDate)).toBe(50_000);
+    expect(getTokenLimit('starter', futureDate)).toBe(165_000);
 
     // Expired pro plan reverts to free limit
-    expect(getTokenLimit('pro', expiredDate)).toBe(25_000);
-    // Active pro plan gets 100k
-    expect(getTokenLimit('pro', futureDate)).toBe(100_000);
+    expect(getTokenLimit('pro', expiredDate)).toBe(75_000);
+    // Active pro plan gets 335k
+    expect(getTokenLimit('pro', futureDate)).toBe(335_000);
   });
 
   it('starts with 0 tokens used for a new user', () => {
@@ -90,17 +90,17 @@ describe('Token Limits & Usage Blocking Logic', () => {
   });
 
   it('triggers quota exceeded and blocking when usage reaches or passes limit', () => {
-    // Record up to 25,000 for free tier
-    recordTokensUsed(testUid, 'key1', 'gemini-2.5-flash', 25000);
-    expect(getStoredTokensUsed(testUid)).toBe(25000);
+    // Record up to 75,000 for free tier
+    recordTokensUsed(testUid, 'key1', 'gemini-2.5-flash', 75000);
+    expect(getStoredTokensUsed(testUid)).toBe(75000);
     expect(isUserQuotaExceeded(testUid, 'free')).toBe(true);
 
-    // But should not exceed starter tier (50k limit)
+    // But should not exceed starter tier (165k limit)
     expect(isUserQuotaExceeded(testUid, 'starter')).toBe(false);
 
-    // Consume up to starter limit
-    recordTokensUsed(testUid, 'key2', 'gemini-3.5-flash', 25000);
-    expect(getStoredTokensUsed(testUid)).toBe(50000);
+    // Consume up to starter limit (75k + 90k = 165k)
+    recordTokensUsed(testUid, 'key2', 'gemini-3.5-flash', 90000);
+    expect(getStoredTokensUsed(testUid)).toBe(165000);
     expect(isUserQuotaExceeded(testUid, 'starter')).toBe(true);
     expect(isUserQuotaExceeded(testUid, 'booster')).toBe(false);
   });

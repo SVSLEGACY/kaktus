@@ -60,3 +60,5 @@ build/
 *.spec
 __pycache__/
 *.pyc
+test 2/
+*.mp4
