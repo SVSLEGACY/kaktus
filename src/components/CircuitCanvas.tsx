@@ -7,6 +7,11 @@ import { requestAgent } from '@/lib/agent/client';
 // system-prompt not used here; canvas chat uses contextPrompt directly
 import { extractTutorialResponse, cleanAgentText } from '@/lib/agent/protocol';
 import { buildHardwareStudioSystemPrompt } from '@/lib/agent/system-prompt';
+import { compactConversationContext } from '@/lib/agent/context-compaction';
+import { breadboardLaneKey } from '@/lib/circuit-networks';
+import { hardwareFetch } from '@/lib/hardware-api';
+
+const EMPTY_BOARD_POSITIONS = {};
 
 export interface ComponentInstance {
   id: string;
@@ -19,6 +24,23 @@ export interface Wire {
   from: string;
   to: string;
   color?: string;
+  net?: string;
+}
+
+interface RenderedWirePath {
+  id: string;
+  path: string;
+  color: string;
+  fromX: number;
+  fromY: number;
+  fromPin: string;
+  labelX: number;
+  labelY: number;
+  labelText: string;
+  fromComp: string;
+  toComp: string;
+  breadboardFrom?: { x: number; y: number; label: string };
+  breadboardTo?: { x: number; y: number; label: string };
 }
 
 export interface TutorialStep {
@@ -50,6 +72,9 @@ interface CircuitCanvasProps {
   currentStep: number;
   onStepChange: (step: number) => void;
   allTabs?: any[];
+  projectMemory?: string;
+  sessionId?: string;
+  workspaceTabId?: string;
   apiKeys?: string[];
   model?: string;
   onUpdateCircuit?: (data: any) => void;
@@ -92,23 +117,110 @@ const getComponentStats = (type: string) => {
 };
 
 function highlightCode(code: string) {
-  return code
-    .replace(/(\/\/[^\n]*)/g, '<span style="color:#6A9955">$1</span>')
-    .replace(/(\b(int|void|const|char|bool|float|double|long|unsigned)\b)/g, '<span style="color:#569CD6">$1</span>')
-    .replace(/(\b(if|else|for|while|return|switch|case|break|continue)\b)/g, '<span style="color:#C586C0">$1</span>')
-    .replace(/(\b(OUTPUT|INPUT|HIGH|LOW|true|false)\b)/g, '<span style="color:#4FC1FF">$1</span>')
-    .replace(/(\b(digitalWrite|digitalRead|analogWrite|analogRead|pinMode|delay|Serial|begin|print|println)\b)/g, '<span style="color:#DCDCAA">$1</span>')
-    .replace(/(\b(setup|loop)\b)/g, '<span style="color:#DCDCAA">$1</span>')
-    .replace(/(#include\s+<[^>]+>|#include\s+"[^"]+")/g, '<span style="color:#C586C0">$1</span>')
-    .replace(/("[^"]*")/g, '<span style="color:#CE9178">$1</span>')
-    .replace(/(\b\d+\b)/g, '<span style="color:#B5CEA8">$1</span>');
+  const escapedCode = code.replace(/[&<>]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[character] || character);
+  return escapedCode
+    .replace(/(\/\/[^\n]*)/g, '<span style="color:#737373">$1</span>')
+    .replace(/(\b(int|void|const|char|bool|float|double|long|unsigned)\b)/g, '<span style="color:#bdbdbd">$1</span>')
+    .replace(/(\b(if|else|for|while|return|switch|case|break|continue)\b)/g, '<span style="color:#e5e5e5">$1</span>')
+    .replace(/(\b(OUTPUT|INPUT|HIGH|LOW|true|false)\b)/g, '<span style="color:#a3a3a3">$1</span>')
+    .replace(/(\b(digitalWrite|digitalRead|analogWrite|analogRead|pinMode|delay|Serial|begin|print|println)\b)/g, '<span style="color:#d4d4d4">$1</span>')
+    .replace(/(\b(setup|loop)\b)/g, '<span style="color:#d4d4d4">$1</span>')
+    .replace(/(#include\s+(?:&lt;[^&]+&gt;|"[^"]+"))/g, '<span style="color:#a3a3a3">$1</span>')
+    .replace(/("[^"]*")/g, '<span style="color:#a3a3a3">$1</span>')
+    .replace(/(\b\d+\b)/g, '<span style="color:#c4c4c4">$1</span>');
+}
+
+function BreadboardGraphic({
+  x,
+  y,
+  boardNumber,
+  boardCount,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+}: {
+  x: number;
+  y: number;
+  boardNumber: number;
+  boardCount: number;
+  onPointerDown: (event: React.PointerEvent<SVGGElement>, boardIndex: number, x: number, y: number) => void;
+  onPointerMove: (event: React.PointerEvent<SVGGElement>) => void;
+  onPointerUp: (event: React.PointerEvent<SVGGElement>) => void;
+}) {
+  const columns = Array.from({ length: 30 }, (_, index) => index);
+  const upperRows = ['A', 'B', 'C', 'D', 'E'];
+  const lowerRows = ['F', 'G', 'H', 'I', 'J'];
+  const renderHole = (cx: number, cy: number, key: string) => (
+    <g key={key}>
+      <circle cx={cx} cy={cy} r="4.4" fill="#c1c7c8" />
+      <circle cx={cx} cy={cy} r="2.5" fill="#27323a" />
+      <circle cx={cx - 0.7} cy={cy - 0.7} r="0.8" fill="#758087" />
+    </g>
+  );
+
+  return (
+    <g
+      transform={`translate(${x} ${y})`}
+      role="button"
+      aria-label={`Move breadboard ${boardNumber}`}
+      pointerEvents="all"
+      style={{ cursor: 'grab' }}
+      onPointerDown={event => onPointerDown(event, boardNumber - 1, x, y)}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    >
+      <title>Drag to move breadboard {boardNumber}</title>
+      <defs>
+        <linearGradient id={`breadboard-surface-${boardNumber}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#f5f6f1" />
+          <stop offset="100%" stopColor="#d8ddd8" />
+        </linearGradient>
+      </defs>
+      <rect x="0" y="0" width="780" height="330" rx="18" fill="#000" opacity="0.22" transform="translate(0 7)" />
+      <rect x="0" y="0" width="780" height="330" rx="18" fill={`url(#breadboard-surface-${boardNumber})`} stroke="#a8b0ad" strokeWidth="2" />
+      <rect x="12" y="12" width="756" height="306" rx="12" fill="none" stroke="#ffffff" strokeWidth="2" opacity="0.75" />
+      <text x="390" y="21" fill="#6a7377" fontSize="9" fontWeight="700" letterSpacing="2" textAnchor="middle">400-POINT BREADBOARD{boardCount > 1 ? ` · ${boardNumber}/${boardCount}` : ''}</text>
+
+      {[39, 54, 285, 300].map((railY, railIndex) => (
+        <g key={`rail-${railIndex}`}>
+          <line x1="82" y1={railY} x2="721" y2={railY} stroke={railIndex % 2 === 0 ? '#d64545' : '#3779b8'} strokeWidth="1" opacity="0.65" />
+          <text x="35" y={railY + 3} fill={railIndex % 2 === 0 ? '#d64545' : '#3779b8'} fontSize="10" fontWeight="700">{railIndex % 2 === 0 ? '+' : '−'}</text>
+          {columns.map(column => renderHole(88 + column * 21, railY, `rail-${railIndex}-${column}`))}
+        </g>
+      ))}
+
+      <rect x="20" y="70" width="740" height="94" rx="5" fill="#e8ebe7" stroke="#c2c8c5" />
+      <rect x="20" y="178" width="740" height="94" rx="5" fill="#e8ebe7" stroke="#c2c8c5" />
+      <rect x="20" y="164" width="740" height="14" fill="#c8ceca" />
+      <line x1="20" y1="170" x2="760" y2="170" stroke="#aeb6b2" strokeWidth="1" />
+
+      {columns.map(column => {
+        const cx = 88 + column * 21;
+        const number = column + 1;
+        return (
+          <g key={`terminal-column-${column}`}>
+            <text x={cx} y="68" fill="#7a8384" fontSize="7" textAnchor="middle">{number}</text>
+            <text x={cx} y="278" fill="#7a8384" fontSize="7" textAnchor="middle">{number}</text>
+            <line x1={cx} y1="84" x2={cx} y2="152" stroke="#aeb8b4" strokeWidth="1" opacity="0.45" />
+            <line x1={cx} y1="192" x2={cx} y2="260" stroke="#aeb8b4" strokeWidth="1" opacity="0.45" />
+            {upperRows.map((row, rowIndex) => renderHole(cx, 84 + rowIndex * 17, `upper-${row}-${column}`))}
+            {lowerRows.map((row, rowIndex) => renderHole(cx, 192 + rowIndex * 17, `lower-${row}-${column}`))}
+          </g>
+        );
+      })}
+      {upperRows.map((row, index) => <text key={`upper-label-${row}`} x="35" y={87 + index * 17} fill="#697477" fontSize="8" fontWeight="700" textAnchor="middle">{row}</text>)}
+      {lowerRows.map((row, index) => <text key={`lower-label-${row}`} x="35" y={195 + index * 17} fill="#697477" fontSize="8" fontWeight="700" textAnchor="middle">{row}</text>)}
+      <text x="390" y="319" fill="#87908e" fontSize="7" letterSpacing="1.5" textAnchor="middle">POWER RAILS · TERMINAL STRIPS · CENTER CHANNEL</text>
+    </g>
+  );
 }
 
 function CodePreviewModal({ code, language, onClose }: { code: string; language: string; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 md:p-12">
-      <div className="bg-[#1e1e1e] border border-gray-700 w-full h-full max-w-6xl max-h-full rounded-xl shadow-2xl flex flex-col overflow-hidden">
-        <div className="h-10 bg-[#252526] border-b border-[#3c3c3c] flex items-center justify-between px-4 shrink-0">
+    <div data-canvas-overlay="true" onWheel={event => event.stopPropagation()} className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 md:p-12">
+      <div className="bg-[#090909] border border-neutral-800 w-full h-full max-w-6xl max-h-full rounded-xl shadow-2xl flex flex-col overflow-hidden" style={{ overscrollBehavior: 'contain' }}>
+        <div className="h-10 bg-[#141414] border-b border-neutral-800 flex items-center justify-between px-4 shrink-0">
           <div className="flex items-center gap-2">
             <span className="text-[#cccccc] text-[11px] font-mono tracking-wider uppercase">{language === 'cpp' ? 'main.cpp' : 'code.ino'}</span>
           </div>
@@ -122,7 +234,7 @@ function CodePreviewModal({ code, language, onClose }: { code: string; language:
              </button>
           </div>
         </div>
-        <div className="flex-1 overflow-auto p-6 bg-[#1e1e1e]">
+        <div className="flex-1 overflow-auto p-6 bg-[#090909]">
           <pre 
             className="text-[13px] leading-relaxed font-mono text-[#d4d4d4] whitespace-pre-wrap"
             dangerouslySetInnerHTML={{ __html: highlightCode(code) }}
@@ -133,42 +245,142 @@ function CodePreviewModal({ code, language, onClose }: { code: string; language:
   );
 }
 
-export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChange: setCurrentStepIndex, apiKeys, model, onUpdateCircuit, onCompileRequest, allTabs }: CircuitCanvasProps) {
-  const [previewCode, setPreviewCode] = useState<{code: string, language: string} | null>(null);
+export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChange: setCurrentStepIndex, apiKeys, model, onUpdateCircuit, onCompileRequest, allTabs, projectMemory, sessionId, workspaceTabId }: CircuitCanvasProps) {
+  const [previewCode, setPreviewCode] = useState<{ code: string; language: string; stepIndex: number } | null>(null);
+  const [codeSaveStatus, setCodeSaveStatus] = useState('Preview only — save edits to update the circuit step.');
+  const previewCodeLayerRef = useRef<HTMLPreElement>(null);
+  const previewLineNumberRef = useRef<HTMLDivElement>(null);
+  const [expandedVerifyText, setExpandedVerifyText] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [wirePaths, setWirePaths] = useState<{ id: string, path: string, color: string, fromX: number, fromY: number, fromPin: string, labelX: number, labelY: number, labelText: string, fromComp: string, toComp: string }[]>([]);
+  const [wirePaths, setWirePaths] = useState<RenderedWirePath[]>([]);
   const [wokwiLoaded, setWokwiLoaded] = useState(false);
   const [expandedPanel, setExpandedPanel] = useState(false);
   const [dockPosition, setDockPosition] = useState<'bottom-right' | 'top-left'>('bottom-right');
   const dragControls = useDragControls();
+  const stepInfoDragControls = useDragControls();
+  const routingPanelDragControls = useDragControls();
+  const boardDragRef = useRef<{ pointerId: number; index: number; startClientX: number; startClientY: number; startX: number; startY: number } | null>(null);
+  const [boardPositionsByProject, setBoardPositionsByProject] = useState<Record<string, Record<number, { x: number; y: number }>>>({});
+  const [boardPositionsReady, setBoardPositionsReady] = useState(false);
+  const boardStorageKey = `kaktus_breadboard_positions_${sessionId || 'local'}`;
+  const boardLayoutKey = `${workspaceTabId || data?.project_name || 'workspace'}:${data?.project_name || 'project'}`;
   const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
   const [selectedWireId, setSelectedWireId] = useState<string | null>(null);
   const [canvasChatOpen, setCanvasChatOpen] = useState(false);
   const [canvasChatInput, setCanvasChatInput] = useState('');
-  const [canvasChatMessages, setCanvasChatMessages] = useState<{role: string, text: string}[]>([]);
+  const [canvasChatMessages, setCanvasChatMessages] = useState<{ role: 'user' | 'assistant'; text: string }[]>([]);
   const [canvasChatLoading, setCanvasChatLoading] = useState(false);
+  const [canvasChatReady, setCanvasChatReady] = useState(false);
   const canvasChatRef = useRef<HTMLDivElement>(null);
 
-  const [isBoardConnected, setIsBoardConnected] = useState(true);
+  const openCodePreview = (code: string, language: string, stepIndex = currentStepIndex) => {
+    if (previewCodeLayerRef.current) previewCodeLayerRef.current.style.transform = 'translate(0px, 0px)';
+    if (previewLineNumberRef.current) previewLineNumberRef.current.style.transform = 'translateY(0px)';
+    setCodeSaveStatus('Preview only — save edits to update the circuit step.');
+    setPreviewCode({ code, language, stepIndex });
+  };
+
+  const syncCodePreviewScroll = (event: React.UIEvent<HTMLTextAreaElement>) => {
+    const { scrollTop, scrollLeft } = event.currentTarget;
+    if (previewCodeLayerRef.current) previewCodeLayerRef.current.style.transform = `translate(${-scrollLeft}px, ${-scrollTop}px)`;
+    if (previewLineNumberRef.current) previewLineNumberRef.current.style.transform = `translateY(${-scrollTop}px)`;
+  };
+
+  const savePreviewCodeToCircuit = () => {
+    if (!previewCode || !data || !onUpdateCircuit) return false;
+    const targetStep = data.steps[previewCode.stepIndex];
+    if (!targetStep) return false;
+    const detailWithoutCode = (targetStep.detail || '').replace(/```[\w+#.-]*\s*[\s\S]*?```/g, '').trim();
+    onUpdateCircuit({
+      ...data,
+      action: 'UPDATE_CURRENT',
+      target_tab: data.project_name,
+      steps: [{
+        ...targetStep,
+        detail: detailWithoutCode || undefined,
+        code: previewCode.code.trim() ? previewCode.code : undefined,
+        code_language: previewCode.code.trim() ? previewCode.language : undefined,
+        replace_step: previewCode.stepIndex + 1,
+      }],
+    });
+    setCodeSaveStatus(`Saved to step ${previewCode.stepIndex + 1}.`);
+    return true;
+  };
+
+  const closeCodePreview = () => {
+    if ((codeSaveStatus.startsWith('Unsaved') || codeSaveStatus.startsWith('Code cleared'))
+      && !window.confirm('Discard unsaved code edits? Choose Cancel to save them first.')) return;
+    setPreviewCode(null);
+  };
+
+  const flashPreviewCodeInApp = () => {
+    if (!previewCode?.code.trim() || !onCompileRequest || !savePreviewCodeToCircuit()) return;
+    const codeToFlash = previewCode.code;
+    setPreviewCode(null);
+    onCompileRequest(codeToFlash);
+  };
+  const isArduinoCodePreview = Boolean(previewCode && /^(?:c|cpp|c\+\+|ino|arduino)$/i.test(previewCode.language));
+
+  useEffect(() => {
+    setBoardPositionsReady(false);
+    try {
+      const stored = localStorage.getItem(boardStorageKey);
+      const parsed: unknown = stored ? JSON.parse(stored) : {};
+      setBoardPositionsByProject(parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed as Record<string, Record<number, { x: number; y: number }>>
+        : {});
+    } catch {
+      setBoardPositionsByProject({});
+    }
+    setBoardPositionsReady(true);
+  }, [boardStorageKey]);
+
+  useEffect(() => {
+    if (!boardPositionsReady) return;
+    try { localStorage.setItem(boardStorageKey, JSON.stringify(boardPositionsByProject)); } catch { /* Keep canvas interaction available if storage is full. */ }
+  }, [boardPositionsByProject, boardPositionsReady, boardStorageKey]);
+
+  useEffect(() => {
+    setCanvasChatReady(false);
+    try {
+      const stored = localStorage.getItem(`kaktus_canvas_chat_${sessionId || 'local'}`);
+      const parsed: unknown = stored ? JSON.parse(stored) : [];
+      setCanvasChatMessages(Array.isArray(parsed)
+        ? parsed.filter((message): message is { role: 'user' | 'assistant'; text: string } =>
+            !!message && typeof message === 'object' &&
+            ((message as { role?: unknown }).role === 'user' || (message as { role?: unknown }).role === 'assistant') &&
+            typeof (message as { text?: unknown }).text === 'string'
+          ).slice(-40)
+        : []);
+    } catch {
+      setCanvasChatMessages([]);
+    }
+    setCanvasChatReady(true);
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!canvasChatReady) return;
+    try { localStorage.setItem(`kaktus_canvas_chat_${sessionId || 'local'}`, JSON.stringify(canvasChatMessages)); } catch { /* Keep canvas chat usable if storage is full. */ }
+  }, [canvasChatMessages, canvasChatReady, sessionId]);
+
+  const [isBoardConnected, setIsBoardConnected] = useState(false);
 
   useEffect(() => {
     const checkBoard = async () => {
       try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 600);
-        const res = await fetch('http://localhost:8000/flash/boards', { signal: controller.signal });
+        const timeout = setTimeout(() => controller.abort(), 3000);
+        const res = await hardwareFetch('/flash/boards', { signal: controller.signal });
         clearTimeout(timeout);
         if (res.ok) {
           const data = await res.json();
-          if (data.ports && data.ports.some((p: any) => p.board)) {
-            setIsBoardConnected(true);
-            return;
-          }
+          setIsBoardConnected(Array.isArray(data.ports) && data.ports.length > 0);
+          return;
         }
       } catch {
-        // Auto-connected supported microcontrollers are always ready
+        setIsBoardConnected(false);
       }
-      setIsBoardConnected(true);
+      setIsBoardConnected(false);
     };
     checkBoard();
   }, []);
@@ -185,30 +397,29 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
     setCanvasChatLoading(true);
 
     // Build context about current circuit state
-    const currentComponents = data?.steps?.slice(0, currentStepIndex + 1)
-      .flatMap(s => s.add_components || []).map(c => `${c.id} (${c.type}) at x:${c.x} y:${c.y}`).join('\n  ') || 'none';
-    const currentWires = data?.steps?.slice(0, currentStepIndex + 1)
-      .flatMap(s => s.add_wiring || []).map(w => `${w.from} → ${w.to} [${w.color}]`).join('\n  ') || 'none';
-    const currentStepInfo = data?.steps?.[currentStepIndex];
-    const allStepsJSON = JSON.stringify(data?.steps?.slice(0, currentStepIndex + 1)?.map(s => ({
-      phase: s.phase, instruction: s.instruction,
-      components: s.add_components?.map(c => ({ id: c.id, type: c.type, x: c.x, y: c.y })),
-      wires: s.add_wiring?.map(w => ({ from: w.from, to: w.to, color: w.color }))
-    })) || []);
-
-    
-      const promptComponents = data?.steps?.slice(0, currentStepIndex + 1)
-        .flatMap(s => s.add_components || []) || [];
-      const promptWires = data?.steps?.slice(0, currentStepIndex + 1)
-        .flatMap(s => s.add_wiring || []) || [];
+    const compactedChat = compactConversationContext(canvasChatMessages);
+    const promptComponents = accumulatedState.components;
+    const promptWires = accumulatedState.wiring;
+    const requestContents = [
+      ...compactedChat.recentMessages.map(message => ({
+        role: message.role === 'user' ? 'user' as const : 'model' as const,
+        parts: [{ text: message.text }],
+      })),
+      { role: 'user' as const, parts: [{ text: userMsg }] },
+    ];
         
       const systemPrompt = buildHardwareStudioSystemPrompt({
         surface: 'canvas',
+        userRequest: userMsg,
         projectName: data?.project_name,
         currentStep: currentStepIndex,
         totalSteps: data?.steps?.length || 0,
         components: promptComponents,
         wires: promptWires,
+        currentState: projectMemory || compactedChat.earlierContext ? {
+          ...(projectMemory ? { perChatProjectMemory: projectMemory } : {}),
+          ...(compactedChat.earlierContext ? { earlierConversationContext: compactedChat.earlierContext } : {}),
+        } : undefined,
       });
 
 
@@ -217,19 +428,20 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
 
 
     try {
+      const isComplexHardwareBuild = /\b(?:build|create|design|construct|prototype|make)\b/i.test(userMsg)
+        && /\b(?:robot|robotic|wrist|arm|motor|servo|actuator|battery|power supply|pcb|drone)\b/i.test(userMsg);
+      const researchRequested = /\b(?:research|look\s*up|find\s+sources?|datasheet|manufacturer|latest|specification|rating)\b/i.test(userMsg);
+      const hardwareAction = /\b(?:build|create|make|design|construct|prototype|wire|connect|add|insert|replace|change|modify)\b/i.test(userMsg);
+      const groundedResearch = researchRequested || (hardwareAction
+        && /\b(?:robot|robotic|wrist|joint|motor|servo|actuator|battery|mains|high[- ]current|power supply|drone|pcb)\b/i.test(userMsg));
       const agentReply = await requestAgent({
         apiKeys: apiKeys || [],
         model,
         systemPrompt: systemPrompt,
-        contents: [
-          ...canvasChatMessages.map(m => ({
-            role: m.role === 'user' ? 'user' as const : 'model' as const,
-            parts: [{ text: m.text }]
-          })),
-          { role: 'user' as const, parts: [{ text: userMsg }] }
-        ],
+        contents: requestContents,
         temperature: 0.2,
-        maxOutputTokens: 32768,
+        maxOutputTokens: isComplexHardwareBuild || groundedResearch || userMsg.length > 320 ? 16_384 : 8_192,
+        research: groundedResearch,
       });
       const replyText = agentReply.text;
 
@@ -266,13 +478,7 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
           const retryReply = await requestAgent({
             apiKeys: apiKeys || [], model,
             systemPrompt: systemPrompt,
-            contents: [
-              ...canvasChatMessages.map(m => ({
-                role: m.role === 'user' ? 'user' as const : 'model' as const,
-                parts: [{ text: m.text }]
-              })),
-              { role: 'user' as const, parts: [{ text: canvasChatInput }] }
-            ],
+            contents: requestContents,
             maxOutputTokens: 32768,
           });
           const cleanReply = cleanAgentText(retryReply.text).trim();
@@ -287,7 +493,7 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
       setCanvasChatMessages(prev => [...prev, { role: 'assistant', text: `Error: ${msg}. Please try again.` }]);
     }
     setCanvasChatLoading(false);
-  }, [canvasChatInput, apiKeys, model, data, currentStepIndex, canvasChatMessages, onUpdateCircuit]);
+  }, [canvasChatInput, apiKeys, model, data, currentStepIndex, allTabs, canvasChatMessages, onUpdateCircuit, projectMemory]);
 
   useEffect(() => {
     import('@wokwi/elements').then(() => {
@@ -362,7 +568,73 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
       wiring: Array.from(wireMap.values()),
       instruction
     };
-  }, [data, currentStepIndex]);
+  }, [data, currentStepIndex, allTabs]);
+
+  const breadboardPlan = useMemo(() => {
+    const components = new Map<string, any>();
+    const wires = new Map<string, any>();
+    const wireSlots = new Map<string, number>();
+    const key = (from: string, to: string) => [from.toLowerCase(), to.toLowerCase()].sort().join('|');
+    let maxConcurrentWires = 0;
+    let boardNeededDuringPlan = false;
+    allTabs?.forEach(tab => {
+      if (tab.name !== data?.project_name) tab.components?.forEach((component: any) => components.set(component.id, component));
+    });
+    for (const step of data?.steps || []) {
+      for (const id of step.remove_components || []) {
+        components.delete(id);
+        for (const [wireKey, wire] of wires) {
+          if (wire.from.startsWith(`${id}:`) || wire.to.startsWith(`${id}:`)) wires.delete(wireKey);
+        }
+      }
+      for (const removal of step.remove_wiring || []) {
+        for (const [wireKey, wire] of wires) {
+          const remove = typeof removal === 'string'
+            ? wire.from === removal || wire.to === removal
+            : key(wire.from, wire.to) === key(removal.from, removal.to);
+          if (remove) wires.delete(wireKey);
+        }
+      }
+      for (const component of step.add_components || []) components.set(component.id, component);
+      for (const wire of step.add_wiring || []) {
+        const wireKey = key(wire.from, wire.to);
+        const laneKey = breadboardLaneKey(wire, id => components.get(id)?.type);
+        if (!wireSlots.has(laneKey)) wireSlots.set(laneKey, wireSlots.size);
+        wires.set(wireKey, wire);
+      }
+      maxConcurrentWires = Math.max(maxConcurrentWires, wires.size);
+      const activeLaneCount = new Set(Array.from(wires.values(), wire => breadboardLaneKey(wire, id => components.get(id)?.type))).size;
+      if (wires.size >= 6 || activeLaneCount < wires.size || Array.from(components.values()).some(component => /breadboard/i.test(component.type || ''))) {
+        boardNeededDuringPlan = true;
+      }
+    }
+    const required = boardNeededDuringPlan;
+    return { required, boardCount: required ? Math.max(1, Math.ceil(wireSlots.size / 60)) : 0, wireSlots };
+  }, [data, allTabs]);
+
+  const breadboardPosition = useMemo(() => {
+    if (!breadboardPlan.required) return null;
+    const plannedComponentMap = new Map<string, ComponentInstance>();
+    for (const step of data?.steps || []) {
+      for (const id of step.remove_components || []) plannedComponentMap.delete(id);
+      for (const component of step.add_components || []) plannedComponentMap.set(component.id, component);
+    }
+    const positionedComponents = Array.from(plannedComponentMap.values());
+    if (!positionedComponents.length) return { x: 900, y: 500, boardCount: breadboardPlan.boardCount };
+    const centerX = positionedComponents.reduce((total, component) => total + (Number(component.x) || 0), 0) / positionedComponents.length;
+    const centerY = positionedComponents.reduce((total, component) => total + (Number(component.y) || 0), 0) / positionedComponents.length;
+    const totalWidth = breadboardPlan.boardCount * 780 + (breadboardPlan.boardCount - 1) * 30;
+    return { x: centerX - totalWidth / 2, y: centerY - 165, boardCount: breadboardPlan.boardCount };
+  }, [accumulatedState.components, breadboardPlan, data]);
+
+  const activeBoardPositions = boardPositionsByProject[boardLayoutKey] || EMPTY_BOARD_POSITIONS;
+  const getBreadboardPosition = useCallback((boardIndex: number) => {
+    if (!breadboardPosition) return null;
+    return activeBoardPositions[boardIndex] || {
+      x: breadboardPosition.x + boardIndex * 810,
+      y: breadboardPosition.y,
+    };
+  }, [activeBoardPositions, breadboardPosition]);
 
   // Helper to find a pin robustly
   const findPin = (pinInfo: any[], pinName: string) => {
@@ -484,6 +756,7 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
     accumulatedState.wiring.forEach((wire, idx) => {
       const [fromId, fromPin] = wire.from.split(':');
       const [toId, toPin] = wire.to.split(':');
+      const wireSlotIndex = breadboardPlan.wireSlots.get(breadboardLaneKey(wire, id => accumulatedState.components.find(component => component.id === id)?.type)) ?? idx;
 
       const fromEl = document.getElementById(`comp-${fromId}`);
       const toEl = document.getElementById(`comp-${toId}`);
@@ -533,41 +806,63 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
         const x2 = toPt.x;
         const y2 = toPt.y;
 
-        const dx = x2 - x1;
-        const dy = y2 - y1;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        
-        // Smart Bezier routing - curves that look like real wires
-        let path: string;
-        const tension = Math.min(dist * 0.4, 120); // Control point distance scales with wire length
-        
-        if (Math.abs(dy) < 50) {
-          // Mostly horizontal — gentle downward arc
-          const sag = 15 + (idx % 3) * 8; // slight stagger to avoid overlap
-          const midX = (x1 + x2) / 2;
-          path = `M ${x1} ${y1} C ${midX} ${y1 + sag}, ${midX} ${y2 + sag}, ${x2} ${y2}`;
-        } else if (Math.abs(dx) < 50) {
-          // Mostly vertical — gentle sideways arc
-          const sway = 15 + (idx % 3) * 8;
-          const midY = (y1 + y2) / 2;
-          path = `M ${x1} ${y1} C ${x1 + sway} ${midY}, ${x2 + sway} ${midY}, ${x2} ${y2}`;
-        } else {
-          // Diagonal — smooth S-curve
-          const cx1 = x1 + dx * 0.25;
-          const cy1 = y1 + dy * 0.05;
-          const cx2 = x2 - dx * 0.25;
-          const cy2 = y2 - dy * 0.05;
-          path = `M ${x1} ${y1} C ${cx1} ${cy1 + tension * 0.3}, ${cx2} ${cy2 - tension * 0.3}, ${x2} ${y2}`;
+        const makeSegment = (start: { x: number; y: number }, end: { x: number; y: number }, segmentIndex: number) => {
+          const dx = end.x - start.x;
+          const dy = end.y - start.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const tension = Math.min(dist * 0.4, 120);
+
+          if (Math.abs(dy) < 50) {
+            const sag = 15 + (segmentIndex % 3) * 8;
+            const midX = (start.x + end.x) / 2;
+            return `M ${start.x} ${start.y} C ${midX} ${start.y + sag}, ${midX} ${end.y + sag}, ${end.x} ${end.y}`;
+          }
+          if (Math.abs(dx) < 50) {
+            const sway = 15 + (segmentIndex % 3) * 8;
+            const midY = (start.y + end.y) / 2;
+            return `M ${start.x} ${start.y} C ${start.x + sway} ${midY}, ${end.x + sway} ${midY}, ${end.x} ${end.y}`;
+          }
+
+          const cx1 = start.x + dx * 0.25;
+          const cy1 = start.y + dy * 0.05;
+          const cx2 = end.x - dx * 0.25;
+          const cy2 = end.y - dy * 0.05;
+          return `M ${start.x} ${start.y} C ${cx1} ${cy1 + tension * 0.3}, ${cx2} ${cy2 - tension * 0.3}, ${end.x} ${end.y}`;
+        };
+
+        let path = makeSegment({ x: x1, y: y1 }, { x: x2, y: y2 }, idx);
+        let breadboardFrom: RenderedWirePath['breadboardFrom'];
+        let breadboardTo: RenderedWirePath['breadboardTo'];
+        if (breadboardPosition) {
+          const slot = wireSlotIndex % 60;
+          const boardIndex = Math.floor(wireSlotIndex / 60);
+          const column = slot % 30;
+          const lowerStrip = slot >= 30;
+          const boardPosition = getBreadboardPosition(boardIndex);
+          if (!boardPosition) return;
+          const boardX = boardPosition.x + 88 + column * 21;
+          const firstRow = lowerStrip ? 'F' : 'A';
+          const lastRow = lowerStrip ? 'J' : 'E';
+          const firstY = boardPosition.y + (lowerStrip ? 192 : 84);
+          breadboardFrom = { x: boardX, y: firstY, label: `${firstRow}${column + 1}` };
+          breadboardTo = { x: boardX, y: firstY + 68, label: `${lastRow}${column + 1}` };
+          path = `${makeSegment({ x: x1, y: y1 }, breadboardFrom, idx)} ${makeSegment(breadboardTo, { x: x2, y: y2 }, idx + 1)}`;
         }
 
+        const wireId = (wire.id && !paths.some(p => p.id === wire.id))
+          ? wire.id
+          : `wire-${wireSlotIndex}-${fromId}:${fromPin}-${toId}:${toPin}-${idx}`;
+
         paths.push({
-          id: `wire-${idx}`,
+          id: wireId,
           path,
           color: wire.color || '#888',
           fromX: x1, fromY: y1, fromPin: fromPin,
           labelX: x2, labelY: y2, labelText: toPin,
           fromComp: fromId,
-          toComp: toId
+          toComp: toId,
+          breadboardFrom,
+          breadboardTo,
         });
       }
     });
@@ -590,18 +885,78 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
   };
 
   // Wire update on state changes + periodic sync during component animations
+  const boardPositionsFingerprint = useMemo(() => {
+    return JSON.stringify(activeBoardPositions);
+  }, [activeBoardPositions]);
+
   useEffect(() => {
     updateWires();
     const t1 = setTimeout(() => updateWires(), 150);
     const t2 = setTimeout(() => updateWires(), 400);
     const t3 = setTimeout(() => updateWires(), 800);
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
-  }, [accumulatedState.components, accumulatedState.wiring, wokwiLoaded, currentStepIndex]);
+  }, [accumulatedState.components, accumulatedState.wiring, boardPositionsFingerprint, breadboardPosition?.x, breadboardPosition?.y, breadboardPosition?.boardCount, boardLayoutKey, wokwiLoaded, currentStepIndex]);
 
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
   const [isPanning, setIsPanning] = useState(false);
   const startPanRef = useRef({ x: 0, y: 0 });
   const [mousePos, setMousePos] = useState({ x: -1000, y: -1000 });
+  const boardDragRAF = useRef<number>(0);
+
+  const handleBreadboardPointerDown = (event: React.PointerEvent<SVGGElement>, boardIndex: number, x: number, y: number) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.ownerSVGElement?.setPointerCapture(event.pointerId);
+    boardDragRef.current = {
+      pointerId: event.pointerId,
+      index: boardIndex,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startX: x,
+      startY: y,
+    };
+  };
+
+  const handleBreadboardPointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
+    const drag = boardDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const clientX = event.clientX;
+    const clientY = event.clientY;
+
+    if (boardDragRAF.current) cancelAnimationFrame(boardDragRAF.current);
+    boardDragRAF.current = requestAnimationFrame(() => {
+      const scale = Math.max(0.1, transform.scale);
+      const newX = drag.startX + (clientX - drag.startClientX) / scale;
+      const newY = drag.startY + (clientY - drag.startClientY) / scale;
+
+      setBoardPositionsByProject(previous => {
+        const currentProject = previous[boardLayoutKey];
+        const currentPos = currentProject?.[drag.index];
+        if (currentPos && Math.abs(currentPos.x - newX) < 0.5 && Math.abs(currentPos.y - newY) < 0.5) {
+          return previous;
+        }
+        return {
+          ...previous,
+          [boardLayoutKey]: {
+            ...(currentProject || {}),
+            [drag.index]: {
+              x: newX,
+              y: newY,
+            },
+          },
+        };
+      });
+      handleDrag();
+    });
+  };
+
+  const handleBreadboardPointerUp = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (boardDragRef.current?.pointerId === event.pointerId) {
+      boardDragRef.current = null;
+      if (boardDragRAF.current) cancelAnimationFrame(boardDragRAF.current);
+      handleDragEnd();
+    }
+  };
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if ((e.target as HTMLElement).id === 'workspace-bg' || (e.target as HTMLElement).tagName === 'svg') {
@@ -633,6 +988,19 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
     if (!el) return;
     
     const handleNativeWheel = (e: WheelEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+
+      // When the mouse is over any card, panel, overlay, textarea, pre, or scrollable area,
+      // allow the card/code to scroll naturally and DO NOT zoom or move the canvas panel.
+      const isInsideCardOrEditor = target.closest(
+        '[data-canvas-overlay], .pointer-events-auto, textarea, pre, code, .overflow-y-auto, .overflow-auto, .overflow-x-auto, [role="dialog"]'
+      );
+
+      if (isInsideCardOrEditor) {
+        return;
+      }
+
       if (e.ctrlKey || e.metaKey || true) {
         // We always want to prevent default scroll when inside canvas
         // so the user can zoom without scrolling the whole page
@@ -651,7 +1019,7 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
   }, []);
 
   return (
-    <div ref={containerRef} className="relative w-full h-full bg-[#1e1e1e] rounded-xl overflow-hidden border border-gray-800 shadow-2xl flex flex-col select-none">
+    <div id="circuit-canvas-container" ref={containerRef} className="relative w-full h-full bg-[#1e1e1e] rounded-xl overflow-hidden border border-gray-800 shadow-2xl flex flex-col select-none">
       <style>{`
         @keyframes dashHologram {
           to { stroke-dashoffset: -1000; }
@@ -700,7 +1068,30 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
           className="absolute origin-top-left pointer-events-none"
           style={{ transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`, width: '4000px', height: '4000px' }}
         >
-          <svg className="absolute inset-0 w-full h-full pointer-events-none z-10" style={{ overflow: 'visible' }}>
+          <svg
+            className="absolute inset-0 w-full h-full pointer-events-none z-10"
+            style={{ overflow: 'visible' }}
+            onPointerMove={handleBreadboardPointerMove}
+            onPointerUp={handleBreadboardPointerUp}
+            onPointerCancel={handleBreadboardPointerUp}
+          >
+            {breadboardPosition && Array.from({ length: breadboardPosition.boardCount }, (_, index) => (
+              (() => {
+                const position = getBreadboardPosition(index);
+                if (!position) return null;
+                return <BreadboardGraphic
+                  key={`breadboard-${index}`}
+                  x={position.x}
+                  y={position.y}
+                  boardNumber={index + 1}
+                  boardCount={breadboardPosition.boardCount}
+                  onPointerDown={handleBreadboardPointerDown}
+                  onPointerMove={() => undefined}
+                  onPointerUp={() => undefined}
+                />;
+              })()
+            ))}
+
             {/* Blueprint Hologram Layer (Behind components and wires) */}
             {data?.blueprint_svg && (
               <g 
@@ -752,6 +1143,22 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                   strokeDasharray="6 8"
                   className="wire-flow"
                 />
+
+                {wire.breadboardFrom && wire.breadboardTo && (
+                  <g>
+                    <line x1={wire.breadboardFrom.x} y1={wire.breadboardFrom.y} x2={wire.breadboardTo.x} y2={wire.breadboardTo.y} stroke={wire.color} strokeWidth={selectedWireId === wire.id ? 3 : 1.5} opacity={selectedWireId === wire.id ? 0.9 : 0.55} />
+                    {[wire.breadboardFrom, wire.breadboardTo].map(hole => (
+                      <g key={hole.label}>
+                        <circle cx={hole.x} cy={hole.y} r={selectedWireId === wire.id ? 6 : 4.5} fill={wire.color} stroke="#17202a" strokeWidth="1.5" />
+                        {selectedWireId === wire.id && (
+                          <text x={hole.x + 7} y={hole.y - 6} fill={wire.color} fontSize="8" fontFamily="monospace" fontWeight="bold" paintOrder="stroke" stroke="#f5f6f1" strokeWidth="2">
+                            {hole.label}
+                          </text>
+                        )}
+                      </g>
+                    ))}
+                  </g>
+                )}
                 
                 {/* Source pin: glow + dot + label */}
                 <circle cx={wire.fromX} cy={wire.fromY} r="6" fill={wire.color} opacity="0.15" />
@@ -1142,6 +1549,62 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
         </div>
       </div>
 
+      {breadboardPosition && wirePaths.length > 0 && (
+        <motion.div
+          drag
+          dragControls={routingPanelDragControls}
+          dragListener={false}
+          dragMomentum={false}
+          dragConstraints={containerRef}
+          data-canvas-overlay="true"
+          onWheel={event => event.stopPropagation()}
+          style={{ overscrollBehavior: 'contain' }}
+          className="absolute right-3 top-3 z-30 w-[min(360px,calc(100%-24px))] overflow-hidden rounded-xl border border-neutral-800 bg-[#090909]/95 shadow-2xl backdrop-blur-md"
+        >
+          <div className="border-b border-gray-800 px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="h-2.5 w-2.5 rounded-sm border border-gray-300 bg-[#e3e7e1] shadow-[0_0_10px_rgba(220,230,220,0.22)]" />
+                <h3 className="text-[11px] font-semibold tracking-wide text-gray-100">Auto breadboard routing</h3>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="rounded-full bg-gray-800 px-2 py-0.5 text-[9px] font-medium text-gray-300">{wirePaths.length} wires</span>
+                <button
+                  type="button"
+                  onPointerDown={event => { event.stopPropagation(); routingPanelDragControls.start(event); }}
+                  style={{ touchAction: 'none' }}
+                  title="Move routing panel"
+                  aria-label="Move routing panel"
+                  className="rounded p-1 text-gray-400 hover:bg-gray-800 hover:text-white cursor-grab active:cursor-grabbing"
+                ><Move size={12} /></button>
+              </div>
+            </div>
+            <p className="mt-1 text-[10px] leading-relaxed text-gray-500">Each wire uses one isolated five-hole strip. Select a row to highlight both exact device pins.</p>
+          </div>
+          <div className="max-h-[34vh] space-y-1 overflow-y-auto p-2" style={{ overscrollBehavior: 'contain' }} onWheel={event => event.stopPropagation()}>
+            {wirePaths.map(wire => (
+              <button
+                key={wire.id}
+                type="button"
+                aria-pressed={selectedWireId === wire.id}
+                onClick={() => { setSelectedWireId(wire.id); setSelectedComponentId(null); }}
+                className={`flex w-full items-center gap-2 rounded-lg border px-2 py-2 text-left transition-colors ${selectedWireId === wire.id ? 'border-neutral-600 bg-white/[0.07]' : 'border-transparent bg-white/[0.025] hover:border-neutral-700 hover:bg-white/[0.05]'}`}
+              >
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: wire.color }} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-mono text-[10px] text-gray-200" title={`${wire.fromComp}:${wire.fromPin} → ${wire.toComp}:${wire.labelText}`}>
+                    {wire.fromComp}:<strong className="text-white">{wire.fromPin}</strong>
+                    <span className="px-1.5 text-gray-500">→</span>
+                    {wire.toComp}:<strong className="text-white">{wire.labelText}</strong>
+                  </span>
+                  <span className="mt-1 block text-[9px] text-gray-500">Breadboard holes: <span className="font-mono text-gray-300">{wire.breadboardFrom?.label} ↔ {wire.breadboardTo?.label}</span></span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </motion.div>
+      )}
+
       {/* Zoom Controls - Bottom Left Corner */}
       <div className="absolute bottom-4 left-4 z-30 flex items-center gap-1 bg-[#111]/80 backdrop-blur-md border border-gray-700 rounded-lg p-1 shadow-lg">
         <button onClick={() => setTransform(p => ({ ...p, scale: Math.min(5, p.scale + 0.2) }))} className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-800 rounded-md transition-colors" title="Zoom In">
@@ -1166,6 +1629,9 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
           dragControls={dragControls}
           dragListener={false}
           dragMomentum={false}
+          dragConstraints={containerRef}
+          data-canvas-overlay="true"
+          onWheel={event => event.stopPropagation()}
           className={`absolute ${dockPosition === 'bottom-right' ? 'bottom-10 right-6 items-end' : 'top-4 left-4 items-start'} z-30 flex flex-col gap-2 max-h-[calc(100vh-32px)] pointer-events-none`}
         >
           {/* We wrap children in a pointer-events-auto div to allow interaction while keeping the wrapper strictly for layout */}
@@ -1176,10 +1642,13 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                 initial={{ opacity: 0, y: 10, x: 20 }}
                 animate={{ opacity: 1, y: 0, x: 0 }}
                 exit={{ opacity: 0, y: 10, x: 20 }}
-                className="bg-[#111]/95 backdrop-blur-md border border-blue-500/30 rounded-xl p-3 w-[260px] shadow-2xl mb-2 pointer-events-auto"
+                data-canvas-overlay="true"
+                onWheel={event => event.stopPropagation()}
+                style={{ overscrollBehavior: 'contain' }}
+                className="bg-[#0a0a0a]/95 backdrop-blur-md border border-neutral-800 rounded-xl p-3 w-[260px] shadow-2xl mb-2 pointer-events-auto"
               >
                 <div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-800">
-                  <h3 className="text-xs font-bold text-blue-400 flex items-center gap-1.5">
+                  <h3 className="text-xs font-bold text-neutral-200 flex items-center gap-1.5">
                     <Search size={14} /> Inspect: {selectedWireId ? 'Wire Connection' : selectedComponentId}
                   </h3>
                   <button onClick={() => { setSelectedComponentId(null); setSelectedWireId(null); }} className="text-gray-500 hover:text-white">
@@ -1187,7 +1656,7 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                   </button>
                 </div>
                 
-                <div className="max-h-[200px] overflow-y-auto space-y-1.5 pr-1">
+                <div className="max-h-[200px] overflow-y-auto space-y-1.5 pr-1" style={{ overscrollBehavior: 'contain' }} onWheel={event => event.stopPropagation()}>
                   {selectedWireId ? (
                     (() => {
                       const w = wirePaths.find(w => w.id === selectedWireId);
@@ -1209,8 +1678,8 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                             </div>
                           </div>
                           
-                          <div className="bg-[#1a1a2e]/60 rounded-lg p-2.5 border border-blue-900/30">
-                            <h4 className="text-[9px] uppercase tracking-wider text-blue-400 font-bold mb-1.5">Estimated Telemetry</h4>
+                          <div className="bg-[#141414]/80 rounded-lg p-2.5 border border-neutral-800">
+                            <h4 className="text-[9px] uppercase tracking-wider text-neutral-400 font-bold mb-1.5">Estimated Telemetry</h4>
                             <div className="grid grid-cols-2 gap-2">
                               {Object.entries(getWireStats(w.color, w.fromPin, w.labelText)).map(([k, v]) => (
                                 <div key={k} className="flex flex-col">
@@ -1229,8 +1698,8 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                         const compDef = data?.steps.flatMap(s => s.add_components || []).find(c => c.id === selectedComponentId);
                         if (!compDef) return null;
                         return (
-                          <div className="bg-[#1a1a2e]/60 rounded-lg p-2.5 border border-blue-900/30">
-                            <h4 className="text-[9px] uppercase tracking-wider text-blue-400 font-bold mb-1.5">Component Specs</h4>
+                          <div className="bg-[#141414]/80 rounded-lg p-2.5 border border-neutral-800">
+                            <h4 className="text-[9px] uppercase tracking-wider text-neutral-400 font-bold mb-1.5">Component Specs</h4>
                             <div className="grid grid-cols-2 gap-2">
                               {Object.entries(getComponentStats(compDef.type)).map(([k, v]) => (
                                 <div key={k} className="flex flex-col">
@@ -1277,9 +1746,12 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                 initial={{ opacity: 0, y: 10, scale: 0.95 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                data-canvas-overlay="true"
+                onWheel={event => event.stopPropagation()}
+                style={{ overscrollBehavior: 'contain' }}
                 className="bg-[#111]/95 backdrop-blur-md border border-gray-700 rounded-xl p-4 w-[300px] max-h-[50vh] overflow-y-auto shadow-2xl pointer-events-auto"
               >
-                <h3 className="text-xs font-bold text-blue-400 uppercase tracking-wider mb-3">All Steps</h3>
+                <h3 className="text-xs font-bold text-neutral-300 uppercase tracking-wider mb-3">All Steps</h3>
                 <div className="space-y-1.5">
                   {data.steps.map((step, i) => {
                     const isComp = step.add_components && step.add_components.length > 0;
@@ -1291,12 +1763,12 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                         key={i}
                         onClick={() => setCurrentStepIndex(i)}
                         className={`w-full text-left flex items-start gap-2 p-2 rounded-lg text-xs transition-all ${
-                          isCurrent ? 'bg-blue-600/20 border border-blue-500/50 text-white' :
+                          isCurrent ? 'bg-white/[0.07] border border-neutral-600 text-white' :
                           isDone ? 'text-gray-400 hover:bg-gray-800/50' : 'text-gray-600 hover:bg-gray-800/30'
                         }`}
                       >
                         <span className="flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold mt-0.5" style={{
-                          background: isDone ? '#22c55e' : isCurrent ? '#3b82f6' : '#333',
+                          background: isDone ? '#525252' : isCurrent ? '#737373' : '#262626',
                           color: 'white'
                         }}>
                           {isDone ? '✓' : i + 1}
@@ -1304,13 +1776,13 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5 mb-0.5">
                             {step.phase && <span className="text-[8px] font-bold uppercase text-gray-500 bg-gray-800 px-1 rounded">{step.phase}</span>}
-                            {step.code && <span className="text-[8px] text-green-500">{'</>'}</span>}
+                            {step.code && <span className="text-[8px] text-neutral-400">{'</>'}</span>}
                           </div>
                           <span className="block truncate">{step.instruction || `Step ${i+1}`}</span>
                           <span className="text-[10px] text-gray-500 mt-0.5 flex gap-2">
-                            {isComp && <span>🔧 {step.add_components?.length || 0} part{(step.add_components?.length || 0) > 1 ? 's' : ''}</span>}
-                            {isWire && <span>🔌 {step.add_wiring?.length || 0} wire{(step.add_wiring?.length || 0) > 1 ? 's' : ''}</span>}
-                            {step.code && <span>💻 code</span>}
+                            {isComp && <span>{step.add_components?.length || 0} part{(step.add_components?.length || 0) > 1 ? 's' : ''}</span>}
+                            {isWire && <span>{step.add_wiring?.length || 0} wire{(step.add_wiring?.length || 0) > 1 ? 's' : ''}</span>}
+                            {step.code && <span>code</span>}
                           </span>
                         </div>
                       </button>
@@ -1326,7 +1798,7 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
             <button 
               onPointerDown={(e) => dragControls.start(e)}
               style={{ touchAction: 'none' }}
-              title="Drag Panel"
+              title="Move step controls and details"
               className="p-1.5 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors text-gray-400 mr-1 cursor-grab active:cursor-grabbing pointer-events-auto"
             >
               <Move size={14} />
@@ -1361,7 +1833,7 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
               disabled={currentStepIndex === data.steps.length - 1}
               title="Next step"
               aria-label="Next step"
-              className="p-1.5 bg-white rounded-lg hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-black"
+              className="p-1.5 bg-neutral-800 text-neutral-200 rounded-lg hover:bg-neutral-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
               <ChevronRight size={14} />
             </button>
@@ -1395,12 +1867,12 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                   }}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold text-xs transition-all duration-300 ${
                     isBoardConnected
-                      ? 'bg-black text-white shadow-[0_0_15px_rgba(255,255,255,0.3)] hover:shadow-[0_0_20px_rgba(255,255,255,0.5)] border border-gray-700'
+                      ? 'bg-[#111] text-white hover:bg-[#1a1a1a] border border-neutral-700'
                       : 'bg-gray-800 text-gray-500 hover:bg-gray-700 border border-gray-800'
                   }`}
-                  title={isBoardConnected ? 'Arduino detected!' : 'Connect an Arduino via USB'}
+                  title={isBoardConnected ? 'Use Kaktus to compile and flash this step to the detected board' : 'Connect your Arduino by USB, then use Kaktus Flash to Board'}
                 >
-                  <Zap size={12} className={isBoardConnected ? 'text-yellow-400' : ''} /> Flash to Board
+                  <Zap size={12} className={isBoardConnected ? 'text-neutral-200' : ''} /> Flash in Kaktus
                 </button>
               );
             })()}
@@ -1412,7 +1884,17 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
             if (!step) return null;
             const pc = 'bg-gray-800 text-gray-200 border-gray-700';
             return (
-              <div className="bg-[#111]/95 backdrop-blur-sm border border-gray-800 rounded-xl px-3 py-2.5 max-w-[340px] shadow-lg space-y-2 pointer-events-auto">
+              <motion.div
+                drag
+                dragControls={stepInfoDragControls}
+                dragListener={false}
+                dragMomentum={false}
+                dragConstraints={containerRef}
+                data-canvas-overlay="true"
+                onWheel={event => event.stopPropagation()}
+                style={{ overscrollBehavior: 'contain' }}
+                className="bg-[#0a0a0a]/95 backdrop-blur-sm border border-neutral-800 rounded-xl px-3 py-2.5 max-w-[340px] shadow-lg space-y-2 pointer-events-auto"
+              >
                 {/* Phase badge + instruction */}
                 <div className="flex items-start gap-2">
                   {step.phase && (
@@ -1420,7 +1902,15 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                       {step.phase}
                     </span>
                   )}
-                  <p className="text-xs text-gray-200 font-medium leading-relaxed">{step.instruction}</p>
+                  <p className="flex-1 text-xs text-gray-200 font-medium leading-relaxed">{step.instruction}</p>
+                  <button
+                    type="button"
+                    onPointerDown={event => { event.stopPropagation(); stepInfoDragControls.start(event); }}
+                    style={{ touchAction: 'none' }}
+                    title="Move this step info panel"
+                    aria-label="Move this step info panel"
+                    className="shrink-0 rounded p-1 text-gray-400 hover:bg-gray-800 hover:text-white cursor-grab active:cursor-grabbing"
+                  ><Move size={12} /></button>
                 </div>
                 
                                 {(() => {
@@ -1433,7 +1923,7 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                   let extractedCode = step.code ? step.code.replace(/\\n/g, '\n') : null;
                   let extractedLang = step.code_language || 'cpp';
 
-                  while ((match = codeBlockRegex.exec(detailText)) !== null) {
+                  while (!step.code && (match = codeBlockRegex.exec(detailText)) !== null) {
                     if (match.index > lastIndex) {
                       parts.push(<span key={lastIndex}>{detailText.slice(lastIndex, match.index)}</span>);
                     }
@@ -1446,7 +1936,7 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                   }
 
                   return (
-                    <div className="max-h-[300px] overflow-y-auto pr-1">
+                    <div className="max-h-[300px] overflow-y-auto pr-1" style={{ overscrollBehavior: 'contain' }} onWheel={event => event.stopPropagation()}>
                       {parts.length > 0 && (
                         <p className="text-[11px] text-gray-500 leading-relaxed border-l-2 border-gray-700 pl-2 whitespace-pre-wrap">
                           {parts}
@@ -1459,8 +1949,8 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                             <span className="text-[9px] text-gray-400 font-mono uppercase tracking-wider bg-gray-900 px-1.5 py-0.5 rounded border border-gray-700">{extractedLang}</span>
                             <div className="flex items-center gap-1">
                               <button
-                                onClick={() => setPreviewCode({ code: extractedCode!, language: extractedLang })}
-                                className="flex items-center gap-1 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 px-2 py-1 rounded text-[9px] font-medium transition-colors border border-blue-500/30"
+                                onClick={() => openCodePreview(extractedCode!, extractedLang, currentStepIndex)}
+                                className="flex items-center gap-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 px-2 py-1 rounded text-[9px] font-medium transition-colors border border-neutral-700"
                                 title="Preview code in editor"
                               >
                                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
@@ -1475,7 +1965,7 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                               </button>
                             </div>
                           </div>
-                          <pre className="text-[10px] font-mono text-gray-300 max-h-[160px] overflow-y-auto overflow-x-auto whitespace-pre-wrap p-1 bg-black/40 rounded">
+                          <pre className="text-[10px] font-mono text-gray-300 max-h-[160px] overflow-y-auto overflow-x-auto whitespace-pre-wrap p-1 bg-black/40 rounded" style={{ overscrollBehavior: 'contain' }} onWheel={event => event.stopPropagation()}>
                             <code dangerouslySetInnerHTML={{ __html: highlightCode(extractedCode) }} />
                           </pre>
                         </div>
@@ -1488,10 +1978,20 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                 {step.verify && (
                   <div className="flex items-start gap-1.5 text-[11px] text-gray-300 bg-gray-900 rounded-lg px-2 py-1.5 border border-gray-700">
                     <span className="flex-shrink-0 mt-0.5 text-gray-400"><CheckCircle2 size={12}/></span>
-                    <span>{step.verify}</span>
+                    <div className="flex-1 overflow-hidden relative">
+                      <div className="line-clamp-4">{step.verify}</div>
+                      {step.verify.length > 150 && (
+                        <button
+                          onClick={() => setExpandedVerifyText(step.verify!)}
+                          className="mt-1 text-neutral-300 hover:text-white text-[9px] flex items-center gap-1 font-medium bg-neutral-800 px-1.5 py-0.5 rounded border border-neutral-700"
+                        >
+                          <Maximize size={10} /> Full Screen
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
-              </div>
+              </motion.div>
             );
           })()}
 
@@ -1502,10 +2002,13 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                 initial={{ opacity: 0, y: 10, height: 0 }}
                 animate={{ opacity: 1, y: 0, height: 'auto' }}
                 exit={{ opacity: 0, y: 10, height: 0 }}
-                className="bg-[#0d1117]/95 backdrop-blur-md border border-blue-500/30 rounded-xl max-w-[380px] shadow-2xl overflow-hidden"
+                data-canvas-overlay="true"
+                onWheel={event => event.stopPropagation()}
+                style={{ overscrollBehavior: 'contain' }}
+                className="bg-[#090909]/95 backdrop-blur-md border border-neutral-800 rounded-xl max-w-[380px] shadow-2xl overflow-hidden"
               >
                 {/* Chat Messages */}
-                <div ref={canvasChatRef} className="max-h-[200px] overflow-y-auto p-2 space-y-2">
+                <div ref={canvasChatRef} className="max-h-[200px] overflow-y-auto p-2 space-y-2" style={{ overscrollBehavior: 'contain' }} onWheel={event => event.stopPropagation()}>
                   {canvasChatMessages.length === 0 && (
                     <p className="text-[10px] text-gray-600 text-center py-3">
                       Ask anything about this circuit, or request changes...
@@ -1513,8 +2016,8 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                   )}
                   {canvasChatMessages.map((msg, i) => (
                     <div key={i} className={`text-[11px] leading-relaxed px-2 py-1.5 rounded-lg ${
-                      msg.role === 'user' 
-                        ? 'bg-blue-600/20 text-blue-300 ml-6' 
+                      msg.role === 'user'
+                        ? 'bg-white/[0.07] text-neutral-200 ml-6'
                         : 'bg-gray-800/50 text-gray-300 mr-4'
                     }`}>
                       {msg.text}
@@ -1539,7 +2042,7 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
                   <button
                     onClick={handleCanvasChat}
                     disabled={!canvasChatInput.trim() || canvasChatLoading || !apiKeys || apiKeys.length === 0}
-                    className="p-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    className="p-1.5 rounded-lg bg-neutral-200 hover:bg-white text-black disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                   >
                     <Send size={10} />
                   </button>
@@ -1553,8 +2056,8 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
             onClick={() => setCanvasChatOpen(!canvasChatOpen)}
             className={`self-end p-2 rounded-full transition-all shadow-lg ${
               canvasChatOpen 
-                ? 'bg-blue-600 text-white ring-2 ring-blue-400/30' 
-                : 'bg-[#1a1a2e]/90 text-gray-400 hover:text-blue-400 hover:bg-[#1a1a2e] border border-gray-700/50'
+                ? 'bg-neutral-200 text-black ring-2 ring-white/20'
+                : 'bg-[#111]/90 text-gray-400 hover:text-white hover:bg-[#181818] border border-neutral-800'
             }`}
             title="Canvas AI Chat"
           >
@@ -1570,15 +2073,18 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 z-[200] bg-[#1e1e1e] flex flex-col"
+            data-canvas-overlay="true"
+            onWheel={event => event.stopPropagation()}
+            style={{ overscrollBehavior: 'contain' }}
+            className="absolute inset-0 z-[200] bg-[#090909] flex flex-col"
           >
             {/* Title Bar */}
-            <div className="flex items-center justify-between h-9 bg-[#252526] border-b border-[#3c3c3c] px-3 shrink-0">
+            <div className="flex items-center justify-between h-9 bg-[#141414] border-b border-neutral-800 px-3 shrink-0">
               <div className="flex items-center gap-2">
                 <div className="flex items-center gap-1.5">
-                  <div className="w-3 h-3 rounded-full bg-[#f14c4c] cursor-pointer" onClick={() => setPreviewCode(null)}></div>
-                  <div className="w-3 h-3 rounded-full bg-[#e2b93d]"></div>
-                  <div className="w-3 h-3 rounded-full bg-[#23d18b]"></div>
+                  <button type="button" title="Close editor" aria-label="Close editor" className="w-3 h-3 rounded-full bg-neutral-500 hover:bg-neutral-300" onClick={closeCodePreview} />
+                  <span className="w-3 h-3 rounded-full bg-neutral-700" />
+                  <span className="w-3 h-3 rounded-full bg-neutral-800" />
                 </div>
                 <span className="text-[11px] text-gray-400 font-medium ml-2">
                   {data?.project_name || 'sketch'}.{previewCode.language === 'python' ? 'py' : previewCode.language === 'cpp' ? 'ino' : previewCode.language}
@@ -1587,14 +2093,39 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => navigator.clipboard.writeText(previewCode.code)}
-                  className="flex items-center gap-1.5 text-[10px] text-gray-400 hover:text-white bg-[#333] hover:bg-[#444] px-2.5 py-1 rounded transition-colors"
+                  className="flex items-center gap-1.5 text-[10px] text-gray-300 hover:text-white bg-neutral-800 hover:bg-neutral-700 px-2.5 py-1 rounded transition-colors"
                 >
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                   Copy All
                 </button>
                 <button
-                  onClick={() => setPreviewCode(null)}
-                  className="text-gray-400 hover:text-white p-1 rounded hover:bg-[#444] transition-colors"
+                  onClick={() => {
+                    setPreviewCode(current => current ? { ...current, code: '' } : current);
+                    setCodeSaveStatus('Code cleared in preview; save to remove it from this step.');
+                  }}
+                  className="text-[10px] text-gray-300 hover:text-white bg-neutral-800 hover:bg-neutral-700 px-2.5 py-1 rounded transition-colors"
+                >
+                  Clear
+                </button>
+                <button
+                  onClick={savePreviewCodeToCircuit}
+                  className="text-[10px] font-medium text-black bg-neutral-200 hover:bg-white px-2.5 py-1 rounded transition-colors"
+                >
+                  Save to step {previewCode.stepIndex + 1}
+                </button>
+                {onCompileRequest && isArduinoCodePreview && (
+                  <button
+                    onClick={flashPreviewCodeInApp}
+                    disabled={!previewCode.code.trim()}
+                    className="text-[10px] font-semibold text-black bg-white hover:bg-neutral-200 disabled:opacity-40 disabled:cursor-not-allowed px-2.5 py-1 rounded transition-colors"
+                    title="Compile and flash using Kaktus in-app controls"
+                  >
+                    Flash in Kaktus
+                  </button>
+                )}
+                <button
+                  onClick={closeCodePreview}
+                  className="text-gray-400 hover:text-white p-1 rounded hover:bg-neutral-800 transition-colors"
                 >
                   <X size={14} />
                 </button>
@@ -1602,36 +2133,62 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
             </div>
 
             {/* Breadcrumb Bar */}
-            <div className="flex items-center h-6 bg-[#252526] border-b border-[#3c3c3c] px-3 text-[10px] text-gray-500 gap-1 shrink-0">
+            <div className="flex items-center h-6 bg-[#101010] border-b border-neutral-800 px-3 text-[10px] text-gray-500 gap-1 shrink-0">
               <span className="text-gray-400">{data?.project_name || 'Project'}</span>
               <span>›</span>
               <span className="text-gray-400">src</span>
               <span>›</span>
-              <span className="text-blue-400">
+              <span className="text-neutral-300">
                 {data?.project_name?.replace(/\s+/g, '_').toLowerCase() || 'sketch'}.{previewCode.language === 'python' ? 'py' : previewCode.language === 'cpp' ? 'ino' : previewCode.language}
               </span>
             </div>
 
+            {isArduinoCodePreview && <div className="shrink-0 border-b border-neutral-800 bg-[#111] px-4 py-2 text-[10px] leading-relaxed text-gray-400">
+              <p className="text-gray-300">
+                Test target: <span className="text-neutral-200">{data?.project_name || 'Current module'}</span>
+                {' · '}Step {previewCode.stepIndex + 1}/{data?.steps.length || 1}
+                {data?.steps[previewCode.stepIndex]?.phase ? ` · ${data.steps[previewCode.stepIndex].phase}` : ''}
+                {data?.steps[previewCode.stepIndex]?.instruction ? ` — ${data.steps[previewCode.stepIndex].instruction}` : ''}
+              </p>
+              <p>Save edits to this step, then use Flash in Kaktus → choose the board and USB port → Flash → Serial Monitor. Compile success alone does not confirm a physical hardware test.</p>
+              <p className="mt-0.5 text-neutral-300">{codeSaveStatus}</p>
+            </div>}
+
             {/* Code Editor Area */}
-            <div className="flex-1 overflow-auto font-mono text-[12px] leading-[20px]">
-              <table className="w-full border-collapse">
-                <tbody>
-                  {previewCode.code.split('\n').map((line, i) => (
-                    <tr key={i} className="hover:bg-[#2a2d2e]">
-                      <td className="text-right pr-4 pl-4 text-gray-600 select-none w-[50px] text-[11px] border-r border-[#3c3c3c] bg-[#1e1e1e] sticky left-0">
-                        {i + 1}
-                      </td>
-                      <td className="pl-4 pr-8 whitespace-pre text-gray-300">
-                        <span dangerouslySetInnerHTML={{ __html: highlightCode(line) }} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="flex flex-1 min-h-0 overflow-hidden bg-[#090909] font-mono text-[12px] leading-[20px]">
+              <div className="relative w-[58px] shrink-0 overflow-hidden border-r border-neutral-800 bg-[#0d0d0d] text-right text-[11px] text-gray-600 select-none">
+                <div ref={previewLineNumberRef} className="absolute top-0 left-0 w-full px-3 py-2">
+                  {previewCode.code.split('\n').map((_, index) => <div key={index} className="h-[20px]">{index + 1}</div>)}
+                </div>
+              </div>
+              <div className="relative flex-1 min-w-0 overflow-hidden">
+                <pre
+                  ref={previewCodeLayerRef}
+                  aria-hidden="true"
+                  className="pointer-events-none absolute top-0 left-0 m-0 min-h-full min-w-max whitespace-pre px-4 py-2 pr-8 font-mono text-[12px] leading-[20px] text-neutral-300"
+                  dangerouslySetInnerHTML={{ __html: highlightCode(previewCode.code) }}
+                />
+                <textarea
+                  aria-label="Edit Arduino code"
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  wrap="off"
+                  value={previewCode.code}
+                  onChange={event => {
+                    setPreviewCode(current => current ? { ...current, code: event.target.value } : current);
+                    setCodeSaveStatus('Unsaved code edits. Save to update this circuit step.');
+                  }}
+                  onScroll={syncCodePreviewScroll}
+                  onWheel={event => event.stopPropagation()}
+                  className="absolute inset-0 z-10 h-full w-full resize-none overflow-auto whitespace-pre border-0 bg-transparent px-4 py-2 pr-8 font-mono text-[12px] leading-[20px] text-transparent caret-white outline-none selection:bg-white/20"
+                  style={{ tabSize: 2, overscrollBehavior: 'contain' }}
+                />
+              </div>
             </div>
 
             {/* Status Bar */}
-            <div className="flex items-center justify-between h-6 bg-[#007acc] px-3 text-[10px] text-white/90 shrink-0">
+            <div className="flex items-center justify-between h-6 bg-[#141414] border-t border-neutral-800 px-3 text-[10px] text-gray-400 shrink-0">
               <div className="flex items-center gap-3">
                 <span>{previewCode.language.toUpperCase()}</span>
                 <span>{previewCode.code.split('\n').length} lines</span>
@@ -1645,6 +2202,29 @@ export function CircuitCanvas({ data, currentStep: currentStepIndex, onStepChang
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Expanded Verification Modal */}
+      {expandedVerifyText && (
+        <div data-canvas-overlay="true" onWheel={event => event.stopPropagation()} className="fixed inset-0 z-[99999] bg-black/80 backdrop-blur-md flex items-center justify-center p-6">
+          <div className="bg-[#111] border border-gray-700 rounded-xl w-full max-w-3xl flex flex-col shadow-2xl overflow-hidden max-h-[85vh]" style={{ overscrollBehavior: 'contain' }}>
+            <div className="flex items-center justify-between p-4 border-b border-gray-800 bg-[#1a1a1a]">
+              <h3 className="text-white font-bold flex items-center gap-2"><CheckCircle2 className="text-neutral-300" /> Verification Details</h3>
+              <button onClick={() => setExpandedVerifyText(null)} className="text-gray-400 hover:text-white transition-colors p-1 rounded hover:bg-gray-800"><X size={20}/></button>
+            </div>
+            <div className="p-6 overflow-y-auto text-gray-200 text-sm leading-relaxed whitespace-pre-wrap">
+              {expandedVerifyText}
+            </div>
+            <div className="p-4 border-t border-gray-800 bg-[#1a1a1a] flex justify-end">
+              <button
+                onClick={() => setExpandedVerifyText(null)}
+                className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg text-sm font-medium transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {!data && (
         <div className="absolute inset-0 flex items-center justify-center text-gray-600 font-medium text-sm">
