@@ -1,4 +1,6 @@
-export const runtime = 'edge';
+export const runtime = 'nodejs';
+
+import { getServerApiKey, getServerApiKeys } from '@/lib/server/api-keys';
 
 const MAX_BODY_BYTES = 1_500_000;
 const MODEL_PATTERN = /^(?:models\/)?gemini-[a-zA-Z0-9._-]+$/;
@@ -11,8 +13,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+
 interface GeminiResponse {
-  error?: { message?: string };
+  error?: { message?: string; code?: number };
   candidates?: Array<{
     content?: { parts?: Array<{ text?: string }> };
     groundingMetadata?: {
@@ -42,42 +45,149 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Request body must be valid JSON.' }, { status: 400 });
   }
 
-  if (!validText(body.apiKey, 512) || !validText(body.model, 160) || !MODEL_PATTERN.test(body.model)) {
-    return Response.json({ error: 'A valid Gemini API key and model are required.' }, { status: 400 });
+  if (!validText(body.model, 160) || !MODEL_PATTERN.test(body.model)) {
+    return Response.json({ error: 'A valid Gemini model identifier is required.' }, { status: 400 });
   }
   if (!validText(body.systemPrompt, 600_000) || !Array.isArray(body.contents) || body.contents.length > 80) {
     return Response.json({ error: 'Invalid agent context.' }, { status: 400 });
   }
 
-  const model = body.model.startsWith('models/') ? body.model : 'models/' + body.model;
-  const upstream = await fetch('https://generativelanguage.googleapis.com/v1beta/' + model + ':generateContent?key=' + encodeURIComponent(body.apiKey), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: body.systemPrompt }] },
-      contents: body.contents,
-      ...(body.research === true ? { tools: [{ google_search: {} }] } : {}),
-      generationConfig: {
-        temperature: typeof body.temperature === 'number' ? Math.min(Math.max(body.temperature, 0), 1) : 0.2,
-        maxOutputTokens: typeof body.maxOutputTokens === 'number' ? Math.min(Math.max(body.maxOutputTokens, 256), 32768) : 16384,
-        responseMimeType: 'text/plain',
-      },
-    }),
-  });
-  const result: GeminiResponse = await upstream.json().catch((): GeminiResponse => ({}));
-  if (!upstream.ok || result.error) {
-    return Response.json({ error: result.error?.message || 'Gemini request failed.' }, { status: upstream.status || 502 });
+  // Resolve API Key: gather candidate keys
+  const candidateKeys: string[] = [];
+  const directKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+
+  if (directKey && directKey !== 'server_managed' && directKey !== 'default_server_key') {
+    candidateKeys.push(directKey);
   }
-  const text = result.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text || '').join('') || '';
-  const grounding = result.candidates?.[0]?.groundingMetadata;
-  const sources = Array.isArray(grounding?.groundingChunks)
-    ? grounding.groundingChunks.flatMap(chunk => chunk.web?.uri && chunk.web?.title
-      ? [{ title: chunk.web.title.slice(0, 240), uri: chunk.web.uri }]
-      : []).filter((source: { uri: string }, index: number, all: { uri: string }[]) => all.findIndex(item => item.uri === source.uri) === index).slice(0, 20)
-    : [];
-  const searchQueries = Array.isArray(grounding?.webSearchQueries) ? grounding.webSearchQueries.slice(0, 12) : [];
-  const usage = result.usageMetadata?.totalTokenCount || 0;
-  return Response.json({ text, sources, searchQueries, researched: body.research === true && sources.length > 0, usage });
+
+  try {
+    const serverKeys = await getServerApiKeys();
+    serverKeys.forEach(k => {
+      if (!candidateKeys.includes(k)) candidateKeys.push(k);
+    });
+  } catch (err) {
+    console.warn('[AgentRoute] Could not get server keys from manager:', err);
+  }
+
+  if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim()) {
+    const envKey = process.env.GEMINI_API_KEY.trim();
+    if (!candidateKeys.includes(envKey)) candidateKeys.push(envKey);
+  }
+
+  if (candidateKeys.length === 0) {
+    return Response.json({
+      error: 'No active Gemini API key found. Please add a Gemini key in the Admin Panel or set GEMINI_API_KEY.',
+    }, { status: 503 });
+  }
+
+  const rawModel = (typeof body.model === 'string' ? body.model : '').replace(/^models\//, '').toLowerCase();
+  const requestedModel = 'models/' + rawModel;
+  let fallbackModel = 'models/gemini-2.0-flash';
+  if (rawModel.includes('flash-lite') || rawModel.includes('lite')) {
+    fallbackModel = 'models/gemini-2.0-flash-lite';
+  } else {
+    fallbackModel = 'models/gemini-2.0-flash';
+  }
+
+  // Real model candidates with seamless fallback
+  const candidateModels = [
+    requestedModel,
+    fallbackModel,
+    'models/gemini-2.0-flash',
+    'models/gemini-2.0-flash-lite',
+  ];
+  const uniqueCandidateModels = Array.from(new Set(candidateModels));
+
+  let lastQuotaError: { message: string; status: number } | null = null;
+  let lastAuthError: { message: string; status: number } | null = null;
+  let lastGeneralError: { message: string; status: number } | null = null;
+
+  // Try candidate keys in pool
+  for (const activeApiKey of candidateKeys) {
+    let keyQuotaBilledExhausted = false;
+    for (const modelToTry of uniqueCandidateModels) {
+      if (keyQuotaBilledExhausted) break;
+      try {
+        const upstream = await fetch('https://generativelanguage.googleapis.com/v1beta/' + modelToTry + ':generateContent?key=' + encodeURIComponent(activeApiKey), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: body.systemPrompt }] },
+            contents: body.contents,
+            ...(body.research === true ? { tools: [{ google_search: {} }] } : {}),
+            generationConfig: {
+              temperature: typeof body.temperature === 'number' ? Math.min(Math.max(body.temperature, 0), 1) : 0.2,
+              maxOutputTokens: typeof body.maxOutputTokens === 'number' ? Math.min(Math.max(body.maxOutputTokens, 256), 32768) : 16384,
+              responseMimeType: 'text/plain',
+            },
+          }),
+        });
+
+        const result: GeminiResponse = await upstream.json().catch((): GeminiResponse => ({}));
+
+        // If model not found (404), skip it immediately without overwriting last error
+        if (upstream.status === 404) {
+          continue;
+        }
+
+        if (upstream.ok && !result.error) {
+          const text = result.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text || '').join('') || '';
+          const grounding = result.candidates?.[0]?.groundingMetadata;
+          const sources = Array.isArray(grounding?.groundingChunks)
+            ? grounding.groundingChunks.flatMap(chunk => chunk.web?.uri && chunk.web?.title
+              ? [{ title: chunk.web.title.slice(0, 240), uri: chunk.web.uri }]
+              : []).filter((source: { uri: string }, index: number, all: { uri: string }[]) => all.findIndex(item => item.uri === source.uri) === index).slice(0, 20)
+            : [];
+          const searchQueries = Array.isArray(grounding?.webSearchQueries) ? grounding.webSearchQueries.slice(0, 12) : [];
+          const usage = result.usageMetadata?.totalTokenCount || 0;
+          return Response.json({ text, sources, searchQueries, researched: body.research === true && sources.length > 0, usage });
+        }
+
+        const errMsg = (result.error?.message || '').toLowerCase();
+        const isQuotaHit = upstream.status === 429 || errMsg.includes('quota') || errMsg.includes('resource_exhausted');
+
+        if (isQuotaHit) {
+          console.warn(`[AgentRoute] Model ${modelToTry} quota hit on key ...${activeApiKey.slice(-4)}: ${result.error?.message}`);
+          lastQuotaError = {
+            message: result.error?.message || 'You exceeded your current quota, please check your plan and billing details.',
+            status: 429,
+          };
+          if (errMsg.includes('exceeded your current quota') || errMsg.includes('billing')) {
+            // Entire key billing quota exhausted, switch to next key immediately
+            keyQuotaBilledExhausted = true;
+            break;
+          }
+          continue;
+        }
+
+        // If auth failure on this key (401 / 403), record and break to try next key in pool
+        if (upstream.status === 401 || (upstream.status === 403 && (errMsg.includes('api key') || errMsg.includes('credential')))) {
+          console.warn(`[AgentRoute] Key ending in ${activeApiKey.slice(-4)} failed with auth error ${upstream.status}. Trying next key...`);
+          lastAuthError = {
+            message: result.error?.message || 'Invalid Gemini API key or credentials.',
+            status: upstream.status,
+          };
+          break;
+        }
+
+        if (result.error?.message) {
+          lastGeneralError = {
+            message: result.error.message,
+            status: upstream.status,
+          };
+        }
+      } catch (fetchErr) {
+        console.warn('[AgentRoute] Upstream fetch error for model:', modelToTry, fetchErr);
+      }
+    }
+  }
+
+  // Prioritize returning quota error if all keys were exhausted so UI can trigger plan upgrade
+  const finalError = lastQuotaError || lastGeneralError || lastAuthError;
+
+  return Response.json({
+    error: finalError?.message || 'Gemini request failed. Please check your keys or quota.',
+  }, { status: finalError?.status || 502 });
 }
 
 export async function GET() {

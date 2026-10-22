@@ -9,13 +9,13 @@ import { signOut } from 'firebase/auth';
 export default function HowToUsePage() {
   const { user } = useAuth();
   return (
-    <div className="min-h-screen bg-white text-[#111] font-sans selection:bg-green-500/20">
+    <div className="min-h-screen text-foreground font-sans selection:bg-primary/20 relative z-10">
       
       {/* Navbar */}
-      <header className="fixed top-0 left-0 right-0 h-20 flex items-center justify-between px-6 md:px-12 z-50 bg-white/90 backdrop-blur-md border-b border-gray-100">
+      <header className="fixed top-0 left-0 right-0 h-20 flex items-center justify-between px-6 md:px-12 z-50 bg-background/80 backdrop-blur-md border-b border-border/40">
         <div className="flex items-center gap-3">
           <Link href="/" className="flex items-center gap-2">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
               <defs>
                 <linearGradient id="logoGrad" x1="0" y1="24" x2="24" y2="0" gradientUnits="userSpaceOnUse">
                   <stop offset="0%" stopColor="#eab308" />
@@ -29,13 +29,13 @@ export default function HowToUsePage() {
                 <path d="M12 10h3a2 2 0 0 0 2-2V5" />
               </g>
             </svg>
-            <span className="font-semibold text-lg tracking-tight">Kaktus</span>
+            <span className="font-semibold text-lg tracking-tight font-sans">Kaktus</span>
           </Link>
 
           {user && (
             <button
               onClick={() => signOut(auth)}
-              className="flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-gray-600 hover:text-red-600 bg-gray-100/90 hover:bg-red-50 border border-gray-200 hover:border-red-200 rounded-full transition-all shadow-xs cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-muted-foreground hover:text-destructive bg-card/80 hover:bg-destructive/10 border border-border rounded-full transition-all shadow-xs cursor-pointer"
               title={`Logged in as ${user.email || 'User'} - Click to Logout`}
             >
               <LogOut size={13} />
@@ -44,14 +44,14 @@ export default function HowToUsePage() {
           )}
         </div>
         
-        <nav className="hidden lg:flex items-center gap-10 text-sm font-medium text-gray-500">
-          <Link href="/app-info" className="hover:text-black transition-colors">App Info</Link>
-          <Link href="/how-to-use" className="text-black transition-colors">How to Use</Link>
-          <Link href="/#pricing" className="hover:text-black transition-colors">Pricing</Link>
+        <nav className="hidden lg:flex items-center gap-10 text-sm font-medium text-muted-foreground">
+          <Link href="/app-info" className="hover:text-foreground transition-colors">App Info</Link>
+          <Link href="/how-to-use" className="text-foreground font-bold transition-colors">How to Use</Link>
+          <Link href="/#pricing" className="hover:text-foreground transition-colors">Pricing</Link>
           {!user ? (
-            <Link href="/login" className="font-semibold text-green-600 hover:text-green-700">Login</Link>
+            <Link href="/login" className="font-semibold text-primary hover:underline">Login</Link>
           ) : (
-            <Link href="/ide" className="font-semibold text-green-600 hover:text-green-700">Workspace</Link>
+            <Link href="/ide" className="font-semibold text-primary hover:underline">Workspace</Link>
           )}
         </nav>
         
@@ -61,72 +61,46 @@ export default function HowToUsePage() {
       {/* Main Content */}
       <main className="pt-32 pb-24 px-6 md:px-12 max-w-4xl mx-auto">
         <div className="mb-16">
-          <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-6">How to Use Kaktus.</h1>
-          <p className="text-xl text-gray-500 leading-relaxed max-w-2xl">
-            A step-by-step guide to designing, wiring, and simulating hardware inside the Kaktus IDE.
+          <h1 className="text-4xl md:text-6xl font-bold tracking-tight mb-6">How to Use Kaktus.</h1>
+          <p className="text-xl text-muted-foreground leading-relaxed">
+            Follow this simple guide to start designing circuits, generating firmware, and simulating your projects directly within Kaktus.
           </p>
         </div>
 
-        <div className="space-y-16 flex flex-col">
-          
-          <div className="flex gap-6">
-            <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center font-bold text-xl flex-shrink-0">1</div>
-            <div>
-              <h2 className="text-3xl font-bold mb-4">Initialize a Workspace</h2>
-              <p className="text-gray-600 leading-relaxed mb-4">
-                Click on the <strong>Enter Workspace</strong> button from the homepage. This will launch the Kaktus IDE. You will see a blank canvas in the center, a chat pane on the left, and a terminal at the bottom.
-              </p>
-              <div className="p-4 bg-gray-50 border border-gray-100 rounded-xl font-mono text-sm text-gray-500">
-                Tip: Use the "+" icon in the tab bar to create multiple subsystems for larger projects.
-              </div>
-            </div>
+        <div className="flex flex-col gap-8">
+          <div className="fabric-panel p-8 shadow-textile">
+            <span className="font-mono text-xs uppercase tracking-widest text-primary font-bold">Step 1</span>
+            <h2 className="text-2xl font-bold mt-2 mb-4">Prompt the Assistant</h2>
+            <p className="text-muted-foreground leading-relaxed">
+              Open the IDE and use the chat input at the bottom to describe what you want to build. For example: <em>"Build an Arduino Uno circuit with a DHT22 temperature sensor and an OLED display."</em> The AI will process your requirements and start generating the wiring steps.
+            </p>
           </div>
 
-          <div className="flex gap-6">
-            <div className="w-12 h-12 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center font-bold text-xl flex-shrink-0">2</div>
-            <div>
-              <h2 className="text-3xl font-bold mb-4">Chat with the Engineering AGI</h2>
-              <p className="text-gray-600 leading-relaxed mb-4">
-                Use the left sidebar to describe your project. You can write in English, Hindi, or Hinglish. 
-              </p>
-              <p className="text-gray-600 leading-relaxed mb-4">
-                Example prompt: <em>"Mujhe ek weather station banana hai using ESP32 aur DHT22 sensor, aur usme ek OLED display bhi lagao."</em>
-              </p>
-              <p className="text-gray-600 leading-relaxed">
-                The AI will process your request, select the correct components, and begin generating a step-by-step assembly tutorial.
-              </p>
-            </div>
+          <div className="fabric-panel p-8 shadow-textile">
+            <span className="font-mono text-xs uppercase tracking-widest text-primary font-bold">Step 2</span>
+            <h2 className="text-2xl font-bold mt-2 mb-4">Review the Interactive Canvas</h2>
+            <p className="text-muted-foreground leading-relaxed">
+              The central canvas visualizes your board, components, and pin-to-pin connections in real-time. You can pan, zoom, and inspect wires. Hovering over a connection reveals the pin mappings, voltage, and signal types.
+            </p>
           </div>
 
-          <div className="flex gap-6">
-            <div className="w-12 h-12 rounded-full bg-green-100 text-green-600 flex items-center justify-center font-bold text-xl flex-shrink-0">3</div>
-            <div>
-              <h2 className="text-3xl font-bold mb-4">Observe the Canvas</h2>
-              <p className="text-gray-600 leading-relaxed mb-4">
-                As the AI replies, you will see components magically appear on the visual canvas. The AI will physically route wires (VCC, GND, SDA, SCL) and place them exactly where they need to go.
-              </p>
-              <p className="text-gray-600 leading-relaxed">
-                You can drag to pan and use the scroll wheel to zoom in on specific microcontroller pins.
-              </p>
-            </div>
+          <div className="fabric-panel p-8 shadow-textile">
+            <span className="font-mono text-xs uppercase tracking-widest text-primary font-bold">Step 3</span>
+            <h2 className="text-2xl font-bold mt-2 mb-4">Navigate Through Assembly Steps</h2>
+            <p className="text-muted-foreground leading-relaxed">
+              The AI breaks down complex builds into sequential steps. Use the step slider or previous/next buttons to follow the build process stage-by-stage. Reorder or inspect component pin assignments on demand.
+            </p>
           </div>
 
-          <div className="flex gap-6">
-            <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xl flex-shrink-0">4</div>
-            <div>
-              <h2 className="text-3xl font-bold mb-4">Simulate in the Terminal</h2>
-              <p className="text-gray-600 leading-relaxed mb-4">
-                Once wiring is complete, open the Terminal tab at the bottom. The AI will output the exact C++/Arduino code required.
-              </p>
-              <p className="text-gray-600 leading-relaxed">
-                You can compile the code virtually and view simulated serial outputs to ensure the logic works perfectly before purchasing real hardware.
-              </p>
-            </div>
+          <div className="fabric-panel p-8 shadow-textile">
+            <span className="font-mono text-xs uppercase tracking-widest text-primary font-bold">Step 4</span>
+            <h2 className="text-2xl font-bold mt-2 mb-4">Simulate & Flash Firmware</h2>
+            <p className="text-muted-foreground leading-relaxed">
+              Open the bottom Terminal panel to test logic against the hardware simulator. Connect your physical microcontroller via USB, click Flash in the Flash Panel, and burn your compiled C++ code directly without external tools.
+            </p>
           </div>
-
         </div>
       </main>
-
     </div>
   );
 }

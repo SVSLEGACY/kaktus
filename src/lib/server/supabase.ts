@@ -1,26 +1,12 @@
 import { createClient } from '@supabase/supabase-js';
 
-function isValidHttpUrl(val?: string): boolean {
-  if (!val || val.includes('[SENSITIVE]')) return false;
-  try {
-    const url = new URL(val);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
-
 const rawSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
 const rawSupabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 
-export const isSupabaseConfigured = Boolean(
-  isValidHttpUrl(rawSupabaseUrl) && 
-  rawSupabaseKey && 
-  !rawSupabaseKey.includes('[SENSITIVE]')
-);
+export const isSupabaseConfigured = Boolean(rawSupabaseUrl && rawSupabaseKey);
 
 if (!isSupabaseConfigured) {
-  if (process.env.NODE_ENV === 'production' && !rawSupabaseUrl?.includes('[SENSITIVE]')) {
+  if (process.env.NODE_ENV === 'production') {
     console.error(
       '[Supabase] CRITICAL: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing in production. Supabase database queries and RPC calls will fail.'
     );
@@ -31,8 +17,8 @@ if (!isSupabaseConfigured) {
   }
 }
 
-const supabaseUrl = isValidHttpUrl(rawSupabaseUrl) ? rawSupabaseUrl! : 'https://dummy.supabase.co';
-const supabaseServiceKey = (rawSupabaseKey && !rawSupabaseKey.includes('[SENSITIVE]')) ? rawSupabaseKey : 'dummy-key';
+const supabaseUrl = rawSupabaseUrl || 'https://dummy.supabase.co';
+const supabaseServiceKey = rawSupabaseKey || 'dummy';
 
 export const adminSupabase = createClient(supabaseUrl, supabaseServiceKey, {
   auth: {
@@ -40,4 +26,30 @@ export const adminSupabase = createClient(supabaseUrl, supabaseServiceKey, {
     persistSession: false,
   },
 });
+
+export async function ensureUserProfile(
+  uid: string,
+  data?: { email?: string | null; displayName?: string | null; avatarUrl?: string | null }
+) {
+  if (!uid || !isSupabaseConfigured) return;
+  try {
+    const payload: Record<string, any> = {
+      uid,
+      updated_at: new Date().toISOString()
+    };
+    if (data?.email) payload.email = data.email;
+    if (data?.displayName) payload.display_name = data.displayName;
+    if (data?.avatarUrl) payload.avatar_url = data.avatarUrl;
+
+    const { error } = await adminSupabase
+      .from('profiles')
+      .upsert(payload, { onConflict: 'uid' });
+
+    if (error) {
+      console.warn('[Supabase] Failed to ensure profile for', uid, error.message);
+    }
+  } catch (err) {
+    console.warn('[Supabase] Exception in ensureUserProfile:', err);
+  }
+}
 

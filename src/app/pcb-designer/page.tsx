@@ -34,11 +34,24 @@ const COMP_LIBRARY = [
 ];
 
 export default function PCBDesignerPage() {
-  const [apiKeys, setApiKeys] = useState<string[]>([]);
-  const [selectedModel, setSelectedModel] = useState('');
+  const [apiKeys, setApiKeys] = useState<string[]>(['server_managed']);
+  const [selectedModel, setSelectedModel] = useState('models/gemini-2.5-flash-lite');
   
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const isDraggingSidebar = useRef(false);
+
+  useEffect(() => {
+    document.body.classList.remove('kaktus-theme');
+    document.body.classList.add('dark');
+    const backdrop = document.querySelector('.fabric-backdrop') as HTMLElement;
+    if (backdrop) backdrop.style.display = 'none';
+    
+    return () => {
+      document.body.classList.add('kaktus-theme');
+      document.body.classList.remove('dark');
+      if (backdrop) backdrop.style.display = '';
+    };
+  }, []);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -61,25 +74,36 @@ export default function PCBDesignerPage() {
   }, []);
   
     useEffect(() => {
+      const localKeys: string[] = [];
+      try {
+        const stored = localStorage.getItem('gemini_api_keys');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((k: string) => {
+              if (typeof k === 'string' && k.trim() && !localKeys.includes(k.trim())) localKeys.push(k.trim());
+            });
+          }
+        }
+        const oldKey = localStorage.getItem('gemini_api_key');
+        if (oldKey && typeof oldKey === 'string' && oldKey.trim() && !localKeys.includes(oldKey.trim())) {
+          localKeys.push(oldKey.trim());
+        }
+      } catch {}
+
       getApiPool().then(pool => {
         if (pool && pool.length > 0) {
-          setApiKeys(pool.map((p: any) => p.key));
           try {
             localStorage.setItem('kaktus_api_pool_meta', JSON.stringify(
               pool.map((p: any) => ({ key: p.key, label: p.label || '' }))
             ));
           } catch {}
-        } else {
-          const stored = localStorage.getItem('gemini_api_keys');
-          if (stored) {
-            try {
-              setApiKeys(JSON.parse(stored));
-            } catch(e) {}
-          } else {
-            const oldKey = localStorage.getItem('gemini_api_key');
-            if (oldKey) setApiKeys([oldKey]);
-          }
         }
+        const poolKeys = (pool && pool.length > 0) ? pool.map((p: any) => p.key) : ['server_managed'];
+        const merged = Array.from(new Set([...localKeys, ...poolKeys])).filter(Boolean);
+        setApiKeys(merged.length > 0 ? merged : ['server_managed']);
+      }).catch(() => {
+        setApiKeys(localKeys.length > 0 ? localKeys : ['server_managed']);
       });
     }, []);
   

@@ -9,11 +9,12 @@ import remarkGfm from 'remark-gfm';
 import { buildHardwareStudioSystemPrompt } from '@/lib/agent/system-prompt';
 import { extractTutorialResponse, extractOptions, extractNextSteps, extractProjectPlanResponse, recoverPersistedProjectPlans } from '@/lib/agent/protocol';
 import type { AgentOptionsBlock, AgentNextStepsBlock, AgentPlan, PlanBuildAction, ProjectPlan, ResearchSource } from '@/lib/agent/protocol';
-import { isCanvasMutationRequest, routeExplicitStepEdit, routePlanPhase } from '@/lib/agent/workspace';
+import { findSignalPinReuseConflicts, isCanvasMutationRequest, routeExplicitStepEdit, routePlanPhase } from '@/lib/agent/workspace';
 import { chatSessionKey, normalizeSessionTitle, type ChatSessionSummary } from '@/lib/session-store';
 import { imageAttachmentDataUrl, isImageAttachment, MAX_IMAGE_ATTACHMENTS, prepareImageAttachments, type ImageAttachment } from '@/lib/agent/image-attachments';
 import { useAuth } from '@/components/AuthProvider';
 import { diffArduinoSource, extractRepairedArduinoSource, inferArduinoBoard, MAX_FIRMWARE_REPAIR_ATTEMPTS, normalizeArduinoSource, runFirmwareRepairLoop, type FirmwareCompileResult, type FirmwareDiffLine } from '@/lib/agent/firmware-validation';
+import { compactConversationContext, messageReferencesPriorImage } from '@/lib/agent/context-compaction';
 
 // --- Interfaces ---
 interface ParsedTutorial {
@@ -77,8 +78,12 @@ interface Message {
 }
 
 interface FirmwareBuildReport {
-  status: 'verified' | 'unverified';
+  status: 'verified' | 'unverified' | 'compile_failed';
   stepName: string;
+  moduleName: string;
+  stepNumber: number;
+  stepInstruction: string;
+  testCondition?: string;
   boardName?: string;
   repairAttempts: number;
   changes?: FirmwareDiffLine[];
@@ -119,13 +124,16 @@ interface WorkflowOverride {
 interface ChatBoxProps {
   apiKeys: string[];
   model: string;
+  availableModels?: Array<{ name: string; displayName?: string }>;
+  onModelChange?: (model: string) => void;
   onExecuteCommand: (cmd: string) => void;
   onUpdateCircuit?: (data: any, targetTabId?: string) => void;
   onStepChange?: (step: number) => void;
   currentStep?: number;
   totalSteps?: number;
   circuitData?: any;
-  allTabs?: Array<{ name: string; isActive: boolean; componentCount: number; wireCount: number; stepCount: number; components: Array<{ id: string; type: string; x?: number; y?: number }>; wires: Array<{ from: string; to: string; color?: string }>; pinAssignments?: string[]; stepOutline?: string[] }>;
+  allTabs?: Array<{ name: string; isActive: boolean; componentCount: number; wireCount: number; stepCount: number; components: Array<{ id: string; type: string; x?: number; y?: number }>; wires: Array<{ from: string; to: string; color?: string; net?: string; stepIndex?: number }>; pinAssignments?: string[]; stepOutline?: string[]; mergedFrom?: string[] }>;
+  projectMemory?: string;
   activeTabId: string;
   targetWorkspaceTabId: string;
   sessionId: string;
@@ -140,6 +148,7 @@ interface ChatBoxProps {
   onPlanActionConsumed: () => void;
   modelSelectorNode?: React.ReactNode;
   onQuotaReached?: () => void;
+  isQuotaReached?: boolean;
 }
 
 
@@ -160,6 +169,61 @@ const HARDWARE_PROMPTS = [
   "Wire an RFID door lock circuit...",
   "Build an audio spectrum analyzer..."
 ];
+
+function isLargeHardwareTask(value: string): boolean {
+  const text = value.trim().toLowerCase();
+  if (!text) return false;
+
+  const scopeSignals = [
+    /\b(complete|full|end[- ]to[- ]end|from scratch|entire|multi[- ]step|all[- ]in[- ]one)\b/,
+    /\b(integrat\w*|automat\w*|control\w*|monitor\w*|debug\w*|test\w*)\b/,
+    /\b(robot|rover|drone|iot|smart home|project|system|pcb)\b/,
+  ].filter(pattern => pattern.test(text)).length;
+  const hardwareAreas = [
+    /\b(arduino|esp32|microcontroller|raspberry pi)\b/,
+    /\b(sensor|ultrasonic|dht|rfid|imu|camera)\b/,
+    /\b(motor|servo|relay|actuator|robot)\b/,
+    /\b(display|lcd|oled|led|buzzer)\b/,
+    /\b(bluetooth|wifi|wi-fi|wireless|cloud|web)\b/,
+    /\b(code|firmware|sketch|software)\b/,
+  ].filter(pattern => pattern.test(text)).length;
+  const largeBuildSignal = /\b(\d+[- ]?dof|robotic arm|line[- ]following|obstacle[- ]avoiding|plant watering|smart home|attendance system|custom pcb|drone|rover|automation|iot)\b/.test(text);
+
+  return text.length >= 320
+    || (text.length >= 110 && scopeSignals >= 2 && hardwareAreas >= 2)
+    || (text.length >= 45 && largeBuildSignal && hardwareAreas >= 1)
+    || hardwareAreas >= 4;
+}
+
+function enforceInAppFirmwareGuidance(text: string, target: string): string {
+  const outOfAppTools = /\b(?:arduino\s+ide|platformio|visual studio code|vs\s*code|another app|different app|external ide)\b/i;
+  const leaveAppAction = /\b(?:open|launch|switch to|go to|use|copy|paste|upload|flash|compile|program|test)\b/i;
+  const paragraphs = text.split(/(\n\s*\n)/);
+  let replaced = false;
+  const guarded = paragraphs.map(paragraph => {
+    if (!outOfAppTools.test(paragraph) || !leaveAppAction.test(paragraph)) return paragraph;
+    replaced = true;
+    return `Testing stays in Kaktus: ${target}. Open this step's Code Preview, edit and save the sketch here, choose Flash in Kaktus, select the board and USB port, then use this app's Serial Monitor. A compile result is not a physical upload or test; if the board or Kaktus connection service is unavailable, physical testing must wait.`;
+  }).join('');
+  return replaced ? guarded.trim() : text;
+}
+
+function modelLabel(model: string, availableModels: Array<{ name: string; displayName?: string }> = []): string {
+  const option = availableModels.find(candidate => candidate.name === model);
+  if (option?.displayName) return option.displayName;
+  return model.replace(/^models\//, '').replace(/-/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
+}
+
+function recommendFullFlashModel(model: string, availableModels: Array<{ name: string; displayName?: string }> = []) {
+  const normalizedModel = model.replace(/^models\//, '').toLowerCase();
+  const sameVersionName = normalizedModel.replace(/-lite$/, '');
+  const sameVersion = availableModels.find(option => option.name.replace(/^models\//, '').toLowerCase() === sameVersionName);
+  if (sameVersion) return sameVersion;
+
+  return availableModels
+    .filter(option => /gemini.*flash/i.test(option.name) && !/lite|preview|experimental/i.test(option.name))
+    .sort((a, b) => b.name.localeCompare(a.name, undefined, { numeric: true }))[0];
+}
 const QUICK_ACTIONS = [
   { label: "LED Blink", prompt: "Build an LED blink circuit with Arduino, include resistor and explain each step" },
   { label: "Robotic Arm", prompt: "Build a 5-finger robotic arm with wrist joint using servo motors and PCA9685 driver" },
@@ -183,7 +247,7 @@ async function validateGeneratedFirmware({
   signal: AbortSignal;
   componentTypes: string[];
   onProgress: (message: string) => void;
-}): Promise<{ ok: boolean; reports: FirmwareBuildReport[] }> {
+}): Promise<{ reports: FirmwareBuildReport[] }> {
   const codeSteps = plan.steps
     .map((step, index) => ({ step, index }))
     .filter(({ step }) => {
@@ -192,10 +256,16 @@ async function validateGeneratedFirmware({
       return Boolean(step.code && (/\bvoid\s+setup\s*\(|\bvoid\s+loop\s*\(|\bpinMode\s*\(|#include\s*[<"]Arduino\.h/i.test(step.code)
         || /^(?:c\+\+|cpp|ino|arduino)$/.test(language)));
     });
-  if (!codeSteps.length) return { ok: true, reports: [] };
+  if (!codeSteps.length) return { reports: [] };
 
   const reports: FirmwareBuildReport[] = [];
   for (const { step, index } of codeSteps) {
+    const testTarget = {
+      moduleName: plan.target_tab || plan.project_name || 'Current module',
+      stepNumber: index + 1,
+      stepInstruction: step.instruction,
+      testCondition: step.verify,
+    };
     const originalSource = step.code || '';
     let source = normalizeArduinoSource(originalSource);
     const board = inferArduinoBoard(source, componentTypes);
@@ -217,11 +287,12 @@ async function validateGeneratedFirmware({
     }
 
     if (!selectedBoard) {
+      step.code = source;
       reports.push({
-        status: 'unverified', stepName: step.phase || `Code step ${index + 1}`, repairAttempts: 0,
-        note: 'Target board could not be identified. No firmware code was added to the canvas.',
+        status: 'unverified', stepName: step.phase || 'Firmware', ...testTarget, repairAttempts: 0,
+        note: 'The firmware source is saved and editable, but automatic compilation could not start because the target board was not identified. Select the board in Kaktus Flash to Board when it is available.',
       });
-      return { ok: false, reports };
+      return { reports };
     }
 
     const compile = async (code: string): Promise<FirmwareCompileResult> => {
@@ -299,35 +370,36 @@ async function validateGeneratedFirmware({
       });
     } catch (error) {
       if (signal.aborted) throw error;
+      step.code = source;
       reports.push({
-        status: 'unverified', stepName: step.phase || `Code step ${index + 1}`, boardName: selectedBoard.name,
-        repairAttempts, note: 'The compiler or repair service became unavailable. No firmware code was added to the canvas.',
+        status: 'unverified', stepName: step.phase || 'Firmware', ...testTarget, boardName: selectedBoard.name,
+        repairAttempts, note: 'The firmware source is saved and editable, but the in-app compiler or repair service became unavailable before verification.',
       });
-      return { ok: false, reports };
+      return { reports };
     }
     source = repairLoop.source;
     repairAttempts = repairLoop.repairAttempts;
     const result = repairLoop.result;
+    step.code = source;
 
     if (!result.ok) {
       reports.push({
-        status: 'unverified', stepName: step.phase || `Code step ${index + 1}`, boardName: selectedBoard.name,
+        status: result.infrastructureFailure ? 'unverified' : 'compile_failed', stepName: step.phase || 'Firmware', ...testTarget, boardName: selectedBoard.name,
         repairAttempts,
         note: result.infrastructureFailure
-          ? 'The local compiler or repair service became unavailable. No firmware code was added to the canvas.'
-          : `Automatic repair reached ${repairAttempts} attempt${repairAttempts === 1 ? '' : 's'} without a verified build. No firmware code was added to the canvas.`,
+          ? `The firmware source is saved and editable, but automatic compilation was unavailable: ${result.diagnostics.slice(0, 1200)}`
+          : `The firmware source is saved and editable, but compilation still reports errors after ${repairAttempts} repair attempt${repairAttempts === 1 ? '' : 's'}: ${result.diagnostics.slice(0, 1600)}`,
       });
-      return { ok: false, reports };
+      return { reports };
     }
 
-    step.code = source;
     const changes = diffArduinoSource(normalizeArduinoSource(originalSource), source);
     reports.push({
-      status: 'verified', stepName: step.phase || `Code step ${index + 1}`, boardName: selectedBoard.name,
+      status: 'verified', stepName: step.phase || 'Firmware', ...testTarget, boardName: selectedBoard.name,
       repairAttempts, changes: changes.length ? changes : undefined,
     });
   }
-  return { ok: true, reports };
+  return { reports };
 }
 
 // --- Subcomponents ---
@@ -350,9 +422,10 @@ function WorkAccordion({ actions, timeMs, active = false, currentActivity, start
     return () => window.clearInterval(interval);
   }, [active, startedAt]);
 
-  if (!active && (!actions || actions.length === 0)) return null;
+  if (!active && (!actions || actions.length === 0) && !timeMs) return null;
 
-  const seconds = Math.floor((active ? elapsedMs : timeMs || actions.length * 2000) / 1000);
+  const rawSeconds = Math.floor((active ? elapsedMs : timeMs || ((actions && actions.length) ? actions.length * 2000 : 1500)) / 1000);
+  const seconds = Math.max(1, rawSeconds);
   const timeStr = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds/60)}m ${seconds%60}s`;
 
   return (
@@ -422,14 +495,19 @@ function FirmwareBuildSummary({ builds }: { builds: FirmwareBuildReport[] }) {
   return (
     <div className="mb-2 mt-2 w-full max-w-[95%] space-y-2">
       {builds.map((build, index) => (
-        <section key={`${build.stepName}-${index}`} className={`border-l-2 pl-2.5 ${build.status === 'verified' ? 'border-emerald-700' : 'border-amber-700'}`}>
-          <p className={`flex items-center gap-1.5 text-[11px] ${build.status === 'verified' ? 'text-emerald-300' : 'text-amber-300'}`}>
+        <section key={`${build.stepName}-${index}`} className={`border-l-2 pl-2.5 ${build.status === 'verified' ? 'border-emerald-700' : build.status === 'compile_failed' ? 'border-red-700' : 'border-amber-700'}`}>
+          <p className={`flex items-center gap-1.5 text-[11px] ${build.status === 'verified' ? 'text-emerald-300' : build.status === 'compile_failed' ? 'text-red-300' : 'text-amber-300'}`}>
             {build.status === 'verified' ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
-            <span className="font-medium">{build.status === 'verified' ? 'Firmware build verified' : 'Firmware held back'}</span>
+            <span className="font-medium">{build.status === 'verified' ? 'Firmware compile verified' : build.status === 'compile_failed' ? 'Firmware saved; compile failed' : 'Firmware saved; build unverified'}</span>
             {build.boardName && <span className="text-gray-500">· {build.boardName}</span>}
             {build.repairAttempts > 0 && <span className="text-gray-500">· {build.repairAttempts} repair{build.repairAttempts === 1 ? '' : 's'}</span>}
           </p>
           {build.note && <p className="mt-1 text-[11px] leading-relaxed text-gray-400">{build.note}</p>}
+          <p className="mt-1 text-[11px] leading-relaxed text-gray-400">
+            <span className="text-gray-300">In-app hardware test target:</span> {build.moduleName} · Step {build.stepNumber} ({build.stepName}) — {build.stepInstruction}
+            {build.testCondition ? ` Pass condition: ${build.testCondition}` : ''}
+            {' '}This compile check has not uploaded or physically tested the board. In Kaktus, open that step's Code Preview, save edits, choose Flash in Kaktus, select the board/USB port, then use Serial Monitor.
+          </p>
           {build.changes && build.changes.length > 0 && (
             <details className="mt-1.5">
               <summary className="w-fit cursor-pointer text-[11px] text-gray-400 hover:text-gray-200">Code changes ({build.changes.filter(change => change.kind === 'added').length} added, {build.changes.filter(change => change.kind === 'removed').length} removed)</summary>
@@ -697,7 +775,7 @@ function printResponseAsPdf(content: string, title: string) {
 }
 
 // --- Main Component ---
-export function ChatBox({ apiKeys, model, onExecuteCommand, onUpdateCircuit, onStepChange, currentStep, totalSteps, circuitData, allTabs, activeTabId, targetWorkspaceTabId, sessionId, sessionTitle, sessions, onNewChat, onSelectSession, onUpdateSessionTitle, onDeleteSession, onOpenImplementationPlan, pendingPlanAction, onPlanActionConsumed, modelSelectorNode, onQuotaReached }: ChatBoxProps) {
+export function ChatBox({ apiKeys, model, availableModels = [], onModelChange, onExecuteCommand, onUpdateCircuit, onStepChange, currentStep, totalSteps, circuitData, allTabs, projectMemory, activeTabId, targetWorkspaceTabId, sessionId, sessionTitle, sessions, onNewChat, onSelectSession, onUpdateSessionTitle, onDeleteSession, onOpenImplementationPlan, pendingPlanAction, onPlanActionConsumed, modelSelectorNode, onQuotaReached, isQuotaReached }: ChatBoxProps) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatReady, setChatReady] = useState(false);
@@ -758,6 +836,14 @@ export function ChatBox({ apiKeys, model, onExecuteCommand, onUpdateCircuit, onS
   }, []);
 
   const [input, setInput] = useState('');
+  const modelRecommendation = /flash-lite/i.test(model) && isLargeHardwareTask(input)
+    ? recommendFullFlashModel(model, availableModels)
+    : undefined;
+  const [pendingModelWarning, setPendingModelWarning] = useState<{
+    request: string;
+    recommendation: { name: string; displayName?: string };
+    workflowOverride?: WorkflowOverride;
+  } | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingActivity, setProcessingActivity] = useState('Preparing your request and active workspace...');
   const [processingActivities, setProcessingActivities] = useState<WorkAction[]>([]);
@@ -802,16 +888,30 @@ export function ChatBox({ apiKeys, model, onExecuteCommand, onUpdateCircuit, onS
     }
   };
 
-  const handleSend = async (overrideInput?: string, workflowOverride?: WorkflowOverride) => {
+  const handleSend = async (overrideInput?: string, workflowOverride?: WorkflowOverride, allowLiteTask = false, modelOverride?: string) => {
+    if (isQuotaReached) {
+      onQuotaReached?.();
+      return;
+    }
     if (isProcessing || isPreparingImages) return;
     const textToSend = overrideInput || input;
     const attachedImages = pendingImages;
     const userMsg = textToSend.trim() || (attachedImages.length
       ? 'Analyze the attached image. Describe what is visible, read any legible text, identify relevant objects or components, and note uncertainty.'
       : '');
-    if (!userMsg || !apiKeys || apiKeys.length === 0 || !model) {
+    const requestModel = modelOverride || model;
+    const workflowPhase = workflowOverride?.plan.subsystems[workflowOverride.phaseIndex];
+    if (!userMsg || !apiKeys || apiKeys.length === 0 || !requestModel) {
       if (!apiKeys || apiKeys.length === 0) alert('Please add at least one API Key in the Admin Panel.');
       return;
+    }
+
+    if (!allowLiteTask && /flash-lite/i.test(requestModel) && isLargeHardwareTask(userMsg)) {
+      const recommendation = recommendFullFlashModel(requestModel, availableModels);
+      if (recommendation) {
+        setPendingModelWarning({ request: userMsg, recommendation, workflowOverride });
+        return;
+      }
     }
     
     onUpdateSessionTitle(sessionTitle === 'New chat' ? normalizeSessionTitle(userMsg) : undefined);
@@ -844,6 +944,10 @@ export function ChatBox({ apiKeys, model, onExecuteCommand, onUpdateCircuit, onS
         .flatMap((s: any) => s.add_components || []) || [];
       const currentWires = circuitData?.steps?.slice(0, (currentStep || 0) + 1)
         .flatMap((s: any) => s.add_wiring || []) || [];
+      const compactedChat = compactConversationContext(messages.map(message => ({
+        role: message.role,
+        text: message.role === 'assistant' ? (message.cleanText || message.content) : message.content,
+      })));
 
       const systemPrompt = buildHardwareStudioSystemPrompt({
         surface: 'circuit',
@@ -854,18 +958,30 @@ export function ChatBox({ apiKeys, model, onExecuteCommand, onUpdateCircuit, onS
         components: currentComponents,
         wires: currentWires,
         allTabs,
+        currentState: projectMemory || workflowPhase || compactedChat.earlierContext ? {
+          ...(projectMemory ? { perChatProjectMemory: projectMemory } : {}),
+          ...(compactedChat.earlierContext ? { earlierConversationContext: compactedChat.earlierContext } : {}),
+          ...(workflowPhase ? {
+            approvedModuleCompletion: {
+              instruction: `Finish every deliverable assigned to ${workflowPhase.name} in this same module tab before marking the phase complete. Do not stop after selecting or placing initial components. Include all scoped mechanical/electrical/firmware work, interfaces, assembly steps, and acceptance checks in this module. Group useful checkpoints into a complete module update; do not split a module across separate turns or tabs.`,
+              module: workflowPhase,
+            },
+          } : {}),
+        } : undefined,
         workflow: workflowOverride ? { stage: 'implementation', plan: workflowOverride.plan, phaseIndex: workflowOverride.phaseIndex, completedPhaseIndices: workflowOverride.completedPhaseIndices, startApproach: workflowOverride.startApproach } : undefined,
       });
 
-      const history: AgentMessage[] = messages.slice(-24).map(m => ({
+      const history: AgentMessage[] = compactedChat.recentMessages.map(m => ({
         role: m.role === 'user' ? 'user' : 'model',
-        parts: [{ text: m.content }]
+        parts: [{ text: m.text }]
       }));
       while (history[0]?.role === 'model') history.shift();
       const previousImageMessage = [...messages].reverse().find(message => message.imageAttachments?.some(isImageAttachment));
       const imagesForRequest = attachedImages.length
         ? attachedImages
-        : previousImageMessage?.imageAttachments?.filter(isImageAttachment) || [];
+        : messageReferencesPriorImage(userMsg)
+          ? previousImageMessage?.imageAttachments?.filter(isImageAttachment) || []
+          : [];
       const contents = history;
       contents.push({ role: 'user', parts: [{ text: userMsg }, ...imagesForRequest.map(toGeminiImagePart)] });
 
@@ -874,7 +990,7 @@ export function ChatBox({ apiKeys, model, onExecuteCommand, onUpdateCircuit, onS
 
       if (imagesForRequest.length) {
         const requestSize = () => new TextEncoder().encode(JSON.stringify({
-          apiKey: apiKeys[0], model, systemPrompt, contents, temperature: 0.2, maxOutputTokens: 32768, research: true,
+          apiKey: apiKeys[0], model: requestModel, systemPrompt, contents, temperature: 0.2, maxOutputTokens: 32768, research: true,
         })).byteLength;
         while (requestSize() > 1_400_000 && contents.length > 1) {
           const removeCount = contents.length > 2 && contents[0].role === 'user' && contents[1].role === 'model' ? 2 : 1;
@@ -887,7 +1003,7 @@ export function ChatBox({ apiKeys, model, onExecuteCommand, onUpdateCircuit, onS
 
       let agentReply = await requestAgent({
         apiKeys,
-        model,
+        model: requestModel,
         systemPrompt,
         contents,
         temperature: 0.2,
@@ -911,7 +1027,7 @@ export function ChatBox({ apiKeys, model, onExecuteCommand, onUpdateCircuit, onS
           setProcessingActivity('Preparing a canvas-format repair...');
           const repairReply = await requestAgent({
             apiKeys,
-            model,
+            model: requestModel,
             systemPrompt: `You are a circuit design assistant. Your ONLY job right now is to convert the previous text-only answer into a valid <tutorial> JSON payload. Output ONLY the <tutorial> tag with JSON inside. No extra prose.
 
 EXACT FORMAT REQUIRED:
@@ -935,6 +1051,8 @@ EXACT FORMAT REQUIRED:
 
 RULES:
 - Every step needs instruction, detail, verify, add_components, add_wiring
+- Preserve the original user request and every applicable deliverable from the previous answer, including a complete firmware sketch in the corresponding step's code and code_language fields. Never drop code merely to repair the JSON format. When a requested test needs controller code, include the complete diagnostic sketch in that test step.
+- Do not invent a separate test phase unless the user requested testing or safe commissioning requires it. Keep objective step verification in verify.
 - CRITICAL LAYOUT RULE: Components are very large. Place them in a wide-open grid, spaced AT LEAST 600-800px apart (x/y coordinates 100-2000). NEVER overlap components or cram them together. Do not try to fit them into a small area.
 - Wires need from, to, color (format: "componentId:pinName")
 - Use real component types: arduino_uno, led, resistor, capacitor, buzzer, servo, etc.
@@ -943,7 +1061,7 @@ RULES:
             contents: [
               ...contents,
               { role: 'model', parts: [{ text: replyText.slice(0, 24000) }] },
-              { role: 'user', parts: [{ text: `Convert your previous answer into a <tutorial> JSON payload for the canvas. Include ALL components with coordinates and ALL wiring. Previous issues: ${tutorialResponse.errors.join(' ')}` }] },
+              { role: 'user', parts: [{ text: `Convert your previous answer into a <tutorial> JSON payload for the canvas. Original user request: ${userMsg}. Preserve its firmware and testing deliverables, including complete editable code fields when needed. Include ALL components with coordinates and ALL wiring. Previous issues: ${tutorialResponse.errors.join(' ')}` }] },
             ] as any,
             temperature: 0.1,
             maxOutputTokens: 32768,
@@ -965,6 +1083,58 @@ RULES:
           }
         } catch (repairError) {
           console.warn('Canvas output repair failed:', repairError);
+        }
+      }
+
+      let moduleCompletionMessage: string | undefined;
+      const phaseDeliverableText = workflowPhase
+        ? [workflowPhase.name, ...workflowPhase.deliverables, ...workflowPhase.acceptance].join(' ')
+        : '';
+      const phaseRequiresFirmwareCode = Boolean(workflowPhase && /\b(?:firmware|embedded software|controller code|control code|diagnostic sketch|test firmware|programming code)\b/i.test(phaseDeliverableText));
+      const phaseHasFirmwareCode = Boolean(tutorialResponse.plan?.steps.some(step => typeof step.code === 'string' && step.code.trim()));
+      const moduleNeedsCompletion = Boolean(workflowPhase && tutorialResponse.plan && (
+        (workflowPhase.deliverables.length > 1 && tutorialResponse.plan.steps.length < 2)
+        || (phaseRequiresFirmwareCode && !phaseHasFirmwareCode)
+      ));
+      if (workflowPhase && tutorialResponse.plan && moduleNeedsCompletion) {
+        const originalSources = agentReply.sources;
+        const originalResearch = agentReply.researched;
+        setProcessingActivity(`Completing all deliverables for ${workflowPhase.name} in its module...`);
+        recordProgress(`The first draft only covered one step; asking the model to finish the full ${workflowPhase.name} module before applying it.`, 'explore');
+        try {
+          const completionReply = await requestAgent({
+            apiKeys,
+            model: requestModel,
+            systemPrompt,
+            contents: [
+              ...contents,
+              { role: 'model', parts: [{ text: replyText.slice(0, 24000) }] },
+              { role: 'user', parts: [{ text: `The preceding draft is incomplete for the approved ${workflowPhase.name} module (${tutorialResponse.plan.steps.length} steps; ${workflowPhase.deliverables.length} planned deliverables). Finish every applicable deliverable in this same tab. Do not return a teaser, component-selection-only step, or ask the user to continue for missing work. Create useful checkpoints and represent components, mechanical artifacts, wiring, interfaces, and verification in the tutorial JSON. ${phaseRequiresFirmwareCode && !phaseHasFirmwareCode ? 'This phase explicitly requires firmware/code but the draft has no code field. Add a dedicated firmware step with the complete editable source in code and code_language, matching the approved board, pins, wiring, and behavior. Do not replace it with prose or pseudocode.' : ''} Cover every deliverable and acceptance item while preserving completed modules and interfaces. Return the full replacement module as one valid <tutorial> JSON payload.` }] },
+            ] as AgentMessage[],
+            temperature: 0.15,
+            maxOutputTokens: 32768,
+            research: false,
+            abortSignal: abortControllerRef.current.signal,
+          });
+          const completedTutorial = extractTutorialResponse(completionReply.text);
+          const completedHasRequiredCode = !phaseRequiresFirmwareCode
+            || Boolean(completedTutorial.plan?.steps.some(step => typeof step.code === 'string' && step.code.trim()));
+          if (completedTutorial.plan && completedTutorial.plan.steps.length >= 2 && completedHasRequiredCode) {
+            agentReply = {
+              ...completionReply,
+              sources: originalSources.length ? originalSources : completionReply.sources,
+              researched: originalResearch || completionReply.researched,
+            };
+            replyText = completionReply.text;
+            tutorialResponse = completedTutorial;
+            extractedPlanResponse = extractProjectPlanResponse(replyText);
+            recordProgress(`Completed the ${workflowPhase.name} module draft with ${completedTutorial.plan.steps.length} build checkpoints.`, 'explore');
+          } else {
+            moduleCompletionMessage = `I held ${workflowPhase.name} because its draft still did not cover the full module. The canvas was left unchanged; retry with a stronger available model or ask to complete this module again.`;
+          }
+        } catch (completionError) {
+          console.warn('Module completion repair failed:', completionError);
+          moduleCompletionMessage = `I held ${workflowPhase.name} because the model could not complete all of its planned deliverables. The canvas was left unchanged; retry this module when the model is available.`;
         }
       }
 
@@ -1024,8 +1194,8 @@ RULES:
       // 3. Parse and compile-check Arduino firmware before committing the circuit update.
       let tutorialData: ParsedTutorial | undefined;
       let firmwareBuilds: FirmwareBuildReport[] | undefined;
-      let firmwareValidationBlocked = false;
-      if (tutorialResponse.plan && onUpdateCircuit && (!proposedPlan || workflowOverride)) {
+      let pinAllocationMessage: string | undefined;
+      if (!moduleCompletionMessage && tutorialResponse.plan && onUpdateCircuit && (!proposedPlan || workflowOverride)) {
         const phaseName = workflowOverride?.plan.subsystems[workflowOverride.phaseIndex]?.name;
         const parsed = workflowOverride && phaseName
           ? routePlanPhase(tutorialResponse.plan, phaseName, allTabs?.map(tab => tab.name) || [])
@@ -1036,8 +1206,16 @@ RULES:
             (currentStep || 0) + 1,
           );
 
-        const isNewProjectTab = parsed.action === 'NEW_PROJECT' || parsed.action === 'NEW_TAB';
         const activeTabName = allTabs?.find(tab => tab.isActive)?.name;
+        const pinLedger = parsed.action === 'NEW_PROJECT' ? [] : allTabs || [];
+        const pinConflicts = findSignalPinReuseConflicts(pinLedger, parsed.steps, parsed.target_tab || activeTabName || '');
+        if (pinConflicts.length) {
+          pinAllocationMessage = `I held this circuit update because it reuses a signal pin that is already assigned: ${pinConflicts.join('; ')}. The current circuit is unchanged. Ask for a free pin or an explicitly shared bus.`;
+          recordProgress('Held the circuit update because a signal pin is already assigned elsewhere in this chat workspace.', 'explore');
+        }
+
+        if (!pinAllocationMessage) {
+        const isNewProjectTab = parsed.action === 'NEW_PROJECT' || parsed.action === 'NEW_TAB';
         const relevantTabs = (allTabs || []).filter(tab => parsed.target_tab ? tab.name === parsed.target_tab : tab.isActive);
         const includeActiveCircuit = !isNewProjectTab && (!parsed.target_tab || parsed.target_tab === activeTabName);
         const projectComponentTypes = [
@@ -1048,7 +1226,7 @@ RULES:
         const firmwareValidation = await validateGeneratedFirmware({
           plan: parsed,
           apiKeys,
-          model,
+          model: requestModel,
           signal: abortControllerRef.current.signal,
           componentTypes: projectComponentTypes,
           onProgress: text => {
@@ -1057,14 +1235,7 @@ RULES:
           },
         });
         firmwareBuilds = firmwareValidation.reports.length ? firmwareValidation.reports : undefined;
-        firmwareValidationBlocked = !firmwareValidation.ok;
-
-        if (firmwareValidationBlocked) {
-          recordProgress('Firmware was held back because it did not pass the automatic build check.', 'explore');
-        }
-
-        if (!firmwareValidationBlocked) {
-          tutorialData = {
+        tutorialData = {
             action: parsed.action,
             target_tab: parsed.target_tab,
             projectName: parsed.project_name,
@@ -1088,11 +1259,11 @@ RULES:
               hasCode: !!s.code,
               hasVerify: !!s.verify
             }))
-          };
+        };
 
-          setProcessingActivity(`Updating ${parsed.target_tab || 'the active workspace'} with ${parsed.steps.length} checked steps...`);
-          onUpdateCircuit(parsed, workflowOverride?.targetTabId || activeTabId);
-          recordProgress(`Updated ${parsed.target_tab || 'the active workspace'} with ${parsed.steps.length} step${parsed.steps.length === 1 ? '' : 's'}.`, 'edit');
+        setProcessingActivity(`Updating ${parsed.target_tab || 'the active workspace'} with ${parsed.steps.length} checked steps...`);
+        onUpdateCircuit(parsed, workflowOverride?.targetTabId || activeTabId);
+        recordProgress(`Updated ${parsed.target_tab || 'the active workspace'} with ${parsed.steps.length} step${parsed.steps.length === 1 ? '' : 's'}.`, 'edit');
         }
       } else if (tutorialResponse.errors.length > 0 && isCanvasBuildRequest) {
         console.warn('Canvas response did not validate:', tutorialResponse.errors);
@@ -1100,23 +1271,25 @@ RULES:
 
       // 4. Parse Options block
       setProcessingActivity('Finishing the response and project details...');
-      const optionsBlock = extractOptions(replyText) || undefined;
+      const optionsBlock = moduleCompletionMessage ? undefined : extractOptions(replyText) || undefined;
 
       // 5. Parse Next Steps block
-      const nextStepsBlock = extractNextSteps(replyText) || undefined;
+      const nextStepsBlock = moduleCompletionMessage ? undefined : extractNextSteps(replyText) || undefined;
 
       // 6. Get Clean Text
       let cleanText = proposedPlan ? extractedPlanResponse.cleanText : tutorialResponse.cleanText;
-      if (firmwareValidationBlocked) {
-        cleanText = 'I held the firmware back because it did not pass the automatic build check. The compiler output stayed hidden; review the board selection and try again.';
+      if (moduleCompletionMessage) {
+        cleanText = moduleCompletionMessage;
+      } else if (pinAllocationMessage) {
+        cleanText = pinAllocationMessage;
       }
-      if (isCanvasBuildRequest && !proposedPlan && !tutorialData) {
+      if (!moduleCompletionMessage && !pinAllocationMessage && isCanvasBuildRequest && !proposedPlan && !tutorialData) {
         cleanText = cleanText.replace(/```json[\s\S]*?```/gi, '').trim();
       }
       if (proposedPlan && !agentReply.researched) {
         cleanText += '\n\nSearch returned no attributable sources for this response. Treat part-specific values as provisional until verified against the manufacturer documentation.';
       }
-      const canvasWarning = !firmwareValidationBlocked && isCanvasBuildRequest && !proposedPlan && !tutorialData
+      const canvasWarning = !moduleCompletionMessage && !pinAllocationMessage && isCanvasBuildRequest && !proposedPlan && !tutorialData
         ? 'Canvas was not changed because the model did not return a valid component-and-step payload. The app tried one format repair; review the answer and retry when the model is available.'
         : undefined;
 
@@ -1124,10 +1297,17 @@ RULES:
       if (cleanText.startsWith('{') && cleanText.endsWith('}') && cleanText.includes('"steps"')) {
         cleanText = "I have updated the circuit design for you.";
       }
+      const codeStepIndex = tutorialData?.steps.findIndex(step => step.hasCode) ?? -1;
+      const firmwareTestTarget = firmwareBuilds?.[0]
+        ? `${firmwareBuilds[0].moduleName}, Step ${firmwareBuilds[0].stepNumber} (${firmwareBuilds[0].stepName})`
+        : codeStepIndex >= 0 && tutorialData
+          ? `${tutorialData.projectName || 'Current module'}, Step ${codeStepIndex + 1}${tutorialData.steps[codeStepIndex].phase ? ` (${tutorialData.steps[codeStepIndex].phase})` : ''} — ${tutorialData.steps[codeStepIndex].instruction}`
+          : `${circuitData?.project_name || 'the current module'}, current firmware step`;
+      cleanText = enforceInAppFirmwareGuidance(cleanText, firmwareTestTarget);
 
       setMessages(prev => [...prev, { 
         role: 'assistant',
-        content: firmwareValidationBlocked ? cleanText : proposedPlan ? 'Implementation plan opened in its workspace tab.' : replyText,
+        content: proposedPlan ? 'Implementation plan opened in its workspace tab.' : replyText,
         cleanText: proposedPlan ? '' : cleanText,
         createdAt: Date.now(),
         commands, 
@@ -1157,6 +1337,9 @@ RULES:
         }]);
       } else {
         const errorMessage = error instanceof Error ? error.message : String(error);
+        if ((errorMessage.toLowerCase().includes('quota') || errorMessage.toLowerCase().includes('exceeded') || errorMessage.toLowerCase().includes('429')) && onQuotaReached) {
+          onQuotaReached();
+        }
         progressLog.push({ type: 'progress', text: `Request ended with an error: ${errorMessage}` });
         setMessages(prev => [...prev, {
           role: 'assistant', content: `Error: ${errorMessage}`, cleanText: `Error: ${errorMessage}`,
@@ -1259,6 +1442,74 @@ RULES:
             </button>
           </div>
       </div>
+
+      {(pendingModelWarning || modelRecommendation) && (
+        <div role="status" aria-live="polite" className="mx-3 mt-2 flex shrink-0 items-start gap-2 rounded-xl border border-amber-500/25 bg-amber-500/[0.08] px-3 py-2 text-left">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-300" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] leading-relaxed text-amber-100">
+              {pendingModelWarning
+                ? `This task is paused before sending because it may be too large for ${modelLabel(model, availableModels)}. ${modelLabel(pendingModelWarning.recommendation.name, availableModels)} is a better fit.`
+                : `This multi-step task may be too large for ${modelLabel(model, availableModels)}. ${modelLabel(modelRecommendation!.name, availableModels)} is a better fit.`}
+            </p>
+            {pendingModelWarning && (
+              <p className="mt-1 truncate text-[10px] text-amber-200/60" title={pendingModelWarning.request}>{pendingModelWarning.request}</p>
+            )}
+            {pendingModelWarning ? (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={isProcessing || isQuotaReached}
+                  onClick={() => {
+                    const pending = pendingModelWarning;
+                    if (!pending) return;
+                    setPendingModelWarning(null);
+                    onModelChange?.(pending.recommendation.name);
+                    void handleSend(pending.request, pending.workflowOverride, true, pending.recommendation.name);
+                  }}
+                  className="rounded-lg border border-amber-300/20 bg-amber-300/15 px-2 py-1 text-[10px] font-semibold text-amber-100 transition-colors hover:bg-amber-300/25 disabled:opacity-50"
+                >
+                  Switch &amp; send
+                </button>
+                <button
+                  type="button"
+                  disabled={isProcessing || isQuotaReached}
+                  onClick={() => {
+                    const pending = pendingModelWarning;
+                    if (!pending) return;
+                    setPendingModelWarning(null);
+                    void handleSend(pending.request, pending.workflowOverride, true, model);
+                  }}
+                  className="rounded-lg px-2 py-1 text-[10px] text-amber-100/70 transition-colors hover:bg-amber-300/10 hover:text-amber-100 disabled:opacity-50"
+                >
+                  Use {modelLabel(model, availableModels)} anyway
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const pending = pendingModelWarning;
+                    if (pending) setInput(current => current.trim() ? current : pending.request);
+                    setPendingModelWarning(null);
+                  }}
+                  title="Dismiss model warning"
+                  aria-label="Dismiss model warning"
+                  className="ml-auto rounded-lg p-1 text-amber-100/60 hover:bg-amber-300/10 hover:text-amber-100"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ) : onModelChange ? (
+              <button
+                type="button"
+                onClick={() => onModelChange(modelRecommendation!.name)}
+                className="mt-1 rounded-lg border border-amber-300/20 bg-amber-300/10 px-2 py-1 text-[10px] font-semibold text-amber-100 transition-colors hover:bg-amber-300/20"
+              >
+                Switch to {modelLabel(modelRecommendation!.name, availableModels)}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      )}
 
       {/* Messages Area */}
       {messages.length > 0 ? (
@@ -1396,6 +1647,16 @@ RULES:
               <PhaseContinueButton plan={msg.phasePlan} phaseIndex={msg.phaseIndex} completedIndices={msg.phaseCompletedIndices || []} onContinue={(plan, phaseIndex, completedPhaseIndices) => handleSend(`Continue the approved project. Build subsystem ${phaseIndex + 1}: ${plan.subsystems[phaseIndex].name}.`, { plan, phaseIndex, completedPhaseIndices, targetTabId: msg.phaseTargetTabId || 'main', startApproach: msg.phaseStartApproach })} />
             )}
 
+            {msg.role === 'assistant' && (msg.content?.toLowerCase().includes('quota') || msg.content?.toLowerCase().includes('exceeded') || msg.content?.toLowerCase().includes('all keys failed')) && (
+              <div 
+                onClick={() => { window.location.href = '/#pricing'; }}
+                className="mt-2.5 inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 font-semibold text-xs cursor-pointer transition-all hover:scale-105 active:scale-95 shadow-sm"
+              >
+                <span className="w-2 h-2 rounded-full bg-red-400 animate-ping" />
+                <span>Quota Exceeded • Click to Upgrade Plan (₹39 - ₹169) →</span>
+              </div>
+            )}
+
             {msg.canvasWarning && (
               <p role="status" className="mt-2 max-w-[95%] border-l-2 border-amber-500/70 pl-2 text-[11px] leading-relaxed text-amber-300/90">{msg.canvasWarning}</p>
             )}
@@ -1531,7 +1792,7 @@ RULES:
             {QUICK_ACTIONS.map(a => (
               <button 
                 key={a.label}
-                onClick={() => handleSend(a.prompt)}
+                onClick={() => isQuotaReached ? onQuotaReached?.() : handleSend(a.prompt)}
                 className="text-[12px] text-gray-400 hover:text-gray-200 flex items-center gap-2 px-2 py-1 rounded-md hover:bg-gray-800/60 transition-all duration-200 w-auto"
               >
                 <Search size={14} className="text-gray-500" />
@@ -1540,7 +1801,7 @@ RULES:
             ))}
           </div>
         )}
-        <div className={`bg-[#212121] border border-gray-700/50 ${messages.length === 0 ? 'rounded-3xl shadow-xl' : 'rounded-3xl'} p-2 flex flex-col focus-within:border-gray-500/50 transition-all`}>
+        <div className={`bg-[#212121] border ${isQuotaReached ? 'border-red-500/60 bg-red-950/20 shadow-[0_0_20px_rgba(239,68,68,0.25)]' : 'border-gray-700/50'} ${messages.length === 0 ? 'rounded-3xl shadow-xl' : 'rounded-3xl'} p-2 flex flex-col focus-within:border-gray-500/50 transition-all`}>
           <input
             ref={imageInputRef}
             type="file"
@@ -1548,9 +1809,26 @@ RULES:
             multiple
             onChange={handleImageSelection}
             className="hidden"
-            disabled={isProcessing || isPreparingImages}
+            disabled={isProcessing || isPreparingImages || isQuotaReached}
             aria-label="Choose images to analyze"
           />
+          {isQuotaReached && (
+            <div 
+              onClick={() => {
+                if (onQuotaReached) onQuotaReached();
+              }}
+              className="mb-1.5 mx-1 px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 rounded-xl flex items-center justify-between text-xs text-red-300 cursor-pointer transition-all hover:scale-[1.01] active:scale-[0.99] group select-none shadow-sm"
+            >
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+                <span className="font-bold text-red-200">Daily Quota Limit Reached!</span>
+                <span className="hidden sm:inline text-red-300/80">Messaging locked. Resets daily at 12:00 AM or upgrade</span>
+              </div>
+              <span className="font-extrabold text-white bg-red-600 hover:bg-red-500 px-2.5 py-0.5 rounded-full text-[11px] uppercase tracking-wider flex items-center gap-1 shadow-sm">
+                Upgrade ₹39-₹169 →
+              </span>
+            </div>
+          )}
           {pendingImages.length > 0 && (
             <div className="flex flex-wrap gap-2 px-2 pt-2" aria-label="Attached images">
               {pendingImages.map((image, index) => (
@@ -1571,25 +1849,33 @@ RULES:
           {isPreparingImages && <p role="status" className="px-2 pt-1 text-[11px] text-gray-400">Preparing image...</p>}
           <textarea
             value={input}
-            onChange={e => setInput(e.target.value)}
+            onChange={e => {
+              setInput(e.target.value);
+              if (pendingModelWarning) setPendingModelWarning(null);
+            }}
+            onClick={() => { if (isQuotaReached) onQuotaReached?.(); }}
             onKeyDown={e => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
+                if (isQuotaReached) {
+                  onQuotaReached?.();
+                  return;
+                }
                 handleSend();
               }
             }}
-            placeholder="Message Agent..."
-            className="w-full bg-transparent text-gray-200 resize-none outline-none min-h-[44px] max-h-[150px] px-2 py-2 text-sm placeholder-gray-500"
+            placeholder={isQuotaReached ? "Daily quota exhausted. Click here to upgrade plan (₹39 - ₹169)..." : "Message Agent..."}
+            className={`w-full bg-transparent resize-none outline-none min-h-[44px] max-h-[150px] px-2 py-2 text-sm ${isQuotaReached ? 'cursor-pointer placeholder-red-400 font-medium text-red-400' : 'text-gray-200 placeholder-gray-500'}`}
             rows={1}
-            disabled={isProcessing}
+            readOnly={isProcessing || isQuotaReached}
           />
           
           <div className="flex items-center justify-between mt-1 px-1">
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                onClick={() => imageInputRef.current?.click()}
-                disabled={isProcessing || isPreparingImages || pendingImages.length >= MAX_IMAGE_ATTACHMENTS}
+                onClick={() => isQuotaReached ? onQuotaReached?.() : imageInputRef.current?.click()}
+                disabled={isQuotaReached ? false : (isProcessing || isPreparingImages || pendingImages.length >= MAX_IMAGE_ATTACHMENTS)}
                 className="text-gray-400 hover:text-white disabled:opacity-40 p-1 rounded-full transition-colors flex items-center justify-center"
                 title="Attach image"
                 aria-label="Attach image"
@@ -1604,12 +1890,16 @@ RULES:
             </div>
             
             <div className="flex items-center gap-2">
-              <button className="text-gray-400 hover:text-white p-1 rounded-full transition-colors flex items-center justify-center">
-                <Mic size={18} />
-              </button>
+
               <button
-                onClick={() => isProcessing ? cancelGeneration() : handleSend()}
-                disabled={(!input.trim() && pendingImages.length === 0 && !isProcessing) || isPreparingImages}
+                onClick={() => {
+                  if (isQuotaReached) {
+                    onQuotaReached?.();
+                  } else {
+                    isProcessing ? cancelGeneration() : handleSend();
+                  }
+                }}
+                disabled={isQuotaReached ? false : ((!input.trim() && pendingImages.length === 0 && !isProcessing) || isPreparingImages)}
                 className={`${isProcessing ? 'bg-red-500 hover:bg-red-600' : 'bg-[#007AFF] hover:bg-blue-600 disabled:bg-gray-700'} text-white w-8 h-8 rounded-full flex items-center justify-center transition-colors shadow-md`}
               >
                 {isProcessing ? <div className="w-2.5 h-2.5 bg-white rounded-[2px]" /> : <ArrowRight size={16} />}

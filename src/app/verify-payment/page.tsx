@@ -56,13 +56,24 @@ export default function VerifyPaymentPage() {
             createdAt: serverTimestamp()
           };
           
+          const durationDays = planId === 'pro' ? 30 : planId === 'booster' ? 14 : 7;
+          const expiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000);
           await setDoc(doc(db, 'payments', pId), txn);
-          await approvePayment(txn);
+          await setDoc(doc(db, 'users', user.uid), {
+            plan: planId,
+            planExpiresAt: expiresAt,
+            planUpdatedAt: serverTimestamp(),
+          }, { merge: true });
+          try {
+            await approvePayment(txn);
+          } catch (err) {
+            console.warn('[VerifyPayment] Server approve fallback note:', err);
+          }
           
           setStatus('success');
           setTimeout(() => {
             router.push('/ide');
-          }, 3000);
+          }, 1500);
         } else {
           setStatus('failed');
           setErrorMsg(`Payment not successful. Status: ${data.status}`);

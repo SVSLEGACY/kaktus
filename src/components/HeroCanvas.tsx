@@ -6,7 +6,7 @@ import * as THREE from 'three';
 
 // 3D Particle Wave
 function ParticleWave() {
-  const count = 3000;
+  const count = 2500;
   
   const { positions, colors } = useMemo(() => {
     const pos = new Float32Array(count * 3);
@@ -56,8 +56,8 @@ function ParticleWave() {
   return (
     <points ref={pointsRef} position={[-4, 0, -2]}>
       <bufferGeometry>
-        <bufferAttribute attach="attributes-position" count={count} array={positions} itemSize={3} />
-        <bufferAttribute attach="attributes-color" count={count} array={colors} itemSize={3} />
+        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+        <bufferAttribute attach="attributes-color" args={[colors, 3]} />
       </bufferGeometry>
       <pointsMaterial 
         size={0.06} 
@@ -72,8 +72,12 @@ function ParticleWave() {
 
 export default function HeroCanvas() {
   return (
-    <div className="thread-particles absolute inset-0 z-0 pointer-events-none opacity-60">
-      <Canvas camera={{ position: [0, 0, 10], fov: 45 }}>
+    <div className="thread-particles absolute inset-0 z-0 pointer-events-none">
+      <Canvas 
+        dpr={[1, 1.5]}
+        gl={{ powerPreference: 'high-performance', antialias: false }}
+        camera={{ position: [0, 0, 10], fov: 45 }}
+      >
         <ambientLight intensity={1} />
         <ParticleWave />
       </Canvas>

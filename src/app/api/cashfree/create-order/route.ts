@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server';
 
 export async function POST(req: Request) {
   try {
+    if (process.env.PAYMENTS_DISABLED === 'true') {
+      return NextResponse.json({ error: 'Payments are currently disabled' }, { status: 403 });
+    }
+
     const { planId, amount, customerId, customerEmail, customerPhone } = await req.json();
 
     if (!amount || !customerId || !planId) {
