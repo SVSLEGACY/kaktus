@@ -62,3 +62,6 @@ __pycache__/
 *.pyc
 test 2/
 *.mp4
+lead/
+brag/
+brag-output/

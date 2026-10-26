@@ -21,7 +21,7 @@ export default function RefundPage() {
           <p>Refunds will not be provided for accounts that have violated our Terms and Conditions.</p>
 
           <h2 className="text-2xl font-bold text-foreground pt-4">4. Contact for Refunds</h2>
-          <p>To request a refund or cancellation, please email us at admin@kaktus.com with your account details and order ID.</p>
+          <p>To request a refund or cancellation, please email us at <a href="mailto:dixitshubham68359@gmail.com" className="text-emerald-500 underline">dixitshubham68359@gmail.com</a> with your account details and order ID.</p>
         </div>
       </div>
     </div>
