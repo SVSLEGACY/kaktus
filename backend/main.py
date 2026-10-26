@@ -50,6 +50,14 @@ BOARD_MAP = {
         "name": "ESP32-C3",
         "vid_pid": ["303A:1001"],
     },
+    "rp2040:rp2040:pico": {
+        "name": "Raspberry Pi Pico",
+        "vid_pid": ["2E8A:0005", "2E8A:000A"],
+    },
+    "STMicroelectronics:stm32:GenF1": {
+        "name": "STM32 Blue Pill",
+        "vid_pid": ["0483:5740", "1A86:7523"],
+    },
 }
 
 _cores_installed = False
@@ -344,6 +352,24 @@ async def upload_to_board(req: FlashRequest):
         return {"status": "error", "error": "Upload timed out (180s)"}
     except Exception as e:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+        return {"status": "error", "error": str(e)}
+
+class SerialWriteRequest(BaseModel):
+    port: str
+    text: str
+
+@app.post("/flash/serial-write")
+async def serial_write(req: SerialWriteRequest):
+    """Send text to a board's serial port (TX). Opens the port momentarily,
+    writes the payload with a trailing newline, then closes it so the
+    serial-monitor SSE stream keeps ownership of reads."""
+    try:
+        ser = serial.Serial(req.port, 9600, timeout=1)
+        ser.write((req.text + "\n").encode("utf-8"))
+        ser.flush()
+        ser.close()
+        return {"status": "success", "message": f"Sent to {req.port}"}
+    except Exception as e:
         return {"status": "error", "error": str(e)}
 
 @app.get("/flash/serial-monitor")

@@ -6,7 +6,8 @@
     "dev": "node server.js",
     "build": "next build --webpack",
     "start": "NODE_ENV=production node server.js",
-    "lint": "eslint"
+    "lint": "eslint",
+    "hardware:bridge": "cd backend && python -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload"
   },
   "dependencies": {
     "@cashfreepayments/cashfree-js": "^1.0.7",
